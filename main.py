@@ -16,7 +16,7 @@ from google.oauth2.service_account import Credentials
 START_ROW = 14
 MAX_ROW = 2000
 
-BENCHMARK_TICKER = "^TOPX"
+BENCHMARK_TICKER = "1306.T"
 
 # rebalance固定パラメータ
 MAX_SINGLE_WEIGHT = 0.15
