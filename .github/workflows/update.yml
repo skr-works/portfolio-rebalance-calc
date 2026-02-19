@@ -1,11 +1,8 @@
 name: Portfolio Auto Update
 
 on:
-  # 仕様固定：平日(月〜金) 15:31 JST = 06:31 UTC
   schedule:
     - cron: '31 6 * * 1-5'
-  
-  # テストやエラー時の再実行用に手動トリガーも有効化しておく
   workflow_dispatch:
 
 jobs:
@@ -20,7 +17,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip' # 依存関係のキャッシュを有効化して実行を高速化
+          cache: 'pip'
 
       - name: Install dependencies
         run: |
@@ -29,7 +26,5 @@ jobs:
 
       - name: Run main.py
         env:
-          # GitHub Secrets から環境変数に渡す（main.py の os.environ.get と完全一致させる）
-          GCP_SA_JSON: ${{ secrets.GCP_SA_JSON }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          APP_CONFIG: ${{ secrets.APP_CONFIG }}
         run: python main.py
