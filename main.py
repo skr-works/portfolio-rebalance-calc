@@ -13,7 +13,6 @@ from google.oauth2.service_account import Credentials
 # =========================
 # 固定仕様（変更禁止）
 # =========================
-SHEET_NAME = "PORTFOLIO"
 START_ROW = 14
 MAX_ROW = 2000
 
@@ -39,10 +38,14 @@ OUT_RANGE = f"E{START_ROW}:Q{MAX_ROW}"
 # Utility
 # =========================
 def get_gspread_client():
-    sa_json_str = os.environ.get("GCP_SA_JSON")
-    if not sa_json_str:
-        raise ValueError("GCP_SA_JSON is not set.")
-    sa_info = json.loads(sa_json_str)
+    app_config_str = os.environ.get("APP_CONFIG")
+    if not app_config_str:
+        raise ValueError("APP_CONFIG is not set.")
+    app_config = json.loads(app_config_str)
+    sa_info = app_config.get("gcp_key")
+    if not sa_info:
+        raise ValueError("gcp_key is missing in APP_CONFIG.")
+        
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_info(sa_info, scopes=scopes)
     return gspread.authorize(creds)
@@ -159,12 +162,22 @@ def main():
     # 1) Sheet read
     # -------------------------
     client = get_gspread_client()
-    sheet_id = os.environ.get("SPREADSHEET_ID")
+    
+    app_config_str = os.environ.get("APP_CONFIG")
+    if not app_config_str:
+        raise ValueError("APP_CONFIG is not set.")
+    app_config = json.loads(app_config_str)
+    
+    sheet_id = app_config.get("spreadsheet_id")
     if not sheet_id:
-        raise ValueError("SPREADSHEET_ID is not set.")
+        raise ValueError("spreadsheet_id is missing in APP_CONFIG.")
+        
+    sheet_name = app_config.get("sheet_name")
+    if not sheet_name:
+        raise ValueError("sheet_name is missing in APP_CONFIG.")
 
     sh = client.open_by_key(sheet_id)
-    ws = sh.worksheet(SHEET_NAME)
+    ws = sh.worksheet(sheet_name)
 
     raw_data = ws.get(f"A{START_ROW}:D{MAX_ROW}")  # list[list[str]]
 
