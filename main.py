@@ -32,7 +32,7 @@ DD_CAUTION = -0.20
 
 # output ranges
 DASH_RANGE = "A1:N10"
-OUT_RANGE = f"E{START_ROW}:Q{MAX_ROW}"
+OUT_RANGE = f"E{START_ROW}:P{MAX_ROW}" # 列が1つ減ったため、QからPに変更
 
 # =========================
 # Utility
@@ -378,7 +378,7 @@ def main():
             cur = None
 
         if cur is None or (isinstance(cur, float) and math.isnan(cur)):
-            # 価格取得失敗 → 行はDATA_NG（仕様：E〜Qは空、M=DATA_NG、N=理由）
+            # 価格取得失敗 → 行はDATA_NG（仕様：E〜Pは空、M=DATA_NG、N=理由）
             row["status"] = "DATA_NG"
             row["health_level"] = "DATA_NG"
             row["health_reason"] = "DATA_NG:NO_PRICE"
@@ -649,26 +649,25 @@ def main():
     # -------------------------
     # 10) Build output matrices
     # -------------------------
-    # E..Q = 13 columns
+    # E..P = 12 columns (tickerを削除)
     output_matrix = []
     for row in rows:
         if row.get("is_empty"):
-            output_matrix.append([""] * 13)
+            output_matrix.append([""] * 12)
             continue
 
         if row.get("status") != "OK":
-            # 仕様：E〜Qは空、M=DATA_NG、N=理由
+            # 仕様：E〜Pは空、L=DATA_NG、M=理由
             output_matrix.append([
-                "", "", "", "", "", "", "", "",   # E..L
-                "DATA_NG",                         # M
-                str(row.get("health_reason", "")), # N
-                "", "", ""                         # O..Q
+                "", "", "", "", "", "", "",       # E..K
+                "DATA_NG",                         # L (health_level)
+                str(row.get("health_reason", "")), # M (health_reason)
+                "", "", ""                         # N..P
             ])
             continue
 
         # OK（価格もOKなら valid_price_rows に入っているはず。念のため）
-        # sector / health / ret_base / rebalance を含めて出す
-        ticker = row.get("ticker", "")
+        # tickerを削除し、列を左に詰める
         cur = row.get("current_price", "")
         mv = row.get("market_value", "")
         cv = row.get("cost_value", "")
@@ -686,19 +685,18 @@ def main():
         trade = row.get("trade_jpy", 0)
 
         output_matrix.append([
-            ticker,     # E
-            cur,        # F
-            mv,         # G
-            cv,         # H
-            pnl,        # I
-            pnlp,       # J
-            w,          # K
-            sec,        # L
-            hl,         # M
-            hr,         # N
-            rb,         # O
-            act,        # P
-            trade,      # Q
+            cur,        # E
+            mv,         # F
+            cv,         # G
+            pnl,        # H
+            pnlp,       # I
+            w,          # J
+            sec,        # K
+            hl,         # L
+            hr,         # M
+            rb,         # N
+            act,        # O
+            trade,      # P
         ])
 
     # dashboard matrix（A1:N10）
