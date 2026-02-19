@@ -526,8 +526,8 @@ def main():
     )
     def fmt_attention(rr):
         tk = rr.get("ticker", "")
-        reason = rr.get("health_reason", "")
-        return f"{tk}:{reason}" if tk else ""
+        # 理由を削り、銘柄名のみを出力するように変更
+        return f"{tk}" if tk else ""
     c_top1 = fmt_attention(attention[0]) if len(attention) > 0 else ""
     c_top2 = fmt_attention(attention[1]) if len(attention) > 1 else ""
     c_top3 = fmt_attention(attention[2]) if len(attention) > 2 else ""
@@ -649,7 +649,7 @@ def main():
     # -------------------------
     # 10) Build output matrices
     # -------------------------
-    # E..P = 12 columns (tickerを削除)
+    # E..P = 12 columns (tickerを削除し、ヘルスとアクションを左に移動)
     output_matrix = []
     for row in rows:
         if row.get("is_empty"):
@@ -657,46 +657,45 @@ def main():
             continue
 
         if row.get("status") != "OK":
-            # 仕様：E〜Pは空、L=DATA_NG、M=理由
+            # 無効行の場合も列の並び順に合わせる
             output_matrix.append([
-                "", "", "", "", "", "", "",       # E..K
-                "DATA_NG",                         # L (health_level)
-                str(row.get("health_reason", "")), # M (health_reason)
-                "", "", ""                         # N..P
+                "", "", "", "", "", "",            # E..J
+                "DATA_NG",                         # K (health_level)
+                str(row.get("health_reason", "")), # L (health_reason)
+                "", "", "", ""                     # M..P
             ])
             continue
 
-        # OK（価格もOKなら valid_price_rows に入っているはず。念のため）
-        # tickerを削除し、列を左に詰める
+        # OK
         cur = row.get("current_price", "")
         mv = row.get("market_value", "")
         cv = row.get("cost_value", "")
         pnl = row.get("pnl_jpy", "")
         pnlp = row.get("pnl_pct", "")
         w = row.get("weight", "")
-        sec = row.get("sector", "")
-
+        
         hl = row.get("health_level", "DATA_NG")
         hr = row.get("health_reason", "")
-
-        rb = row.get("ret_base", "")
-
+        
         act = row.get("action", "HOLD")
         trade = row.get("trade_jpy", 0)
+        
+        sec = row.get("sector", "")
+        rb = row.get("ret_base", "")
 
         output_matrix.append([
-            cur,        # E
-            mv,         # F
-            cv,         # G
-            pnl,        # H
-            pnlp,       # I
-            w,          # J
-            sec,        # K
-            hl,         # L
-            hr,         # M
-            rb,         # N
-            act,        # O
-            trade,      # P
+            cur,        # E: 現在値
+            mv,         # F: 評価額
+            cv,         # G: 取得額
+            pnl,        # H: 損益(円)
+            pnlp,       # I: 損益(%)
+            w,          # J: ウェイト
+            hl,         # K: ヘルスチェック (移動)
+            hr,         # L: 判定理由 (移動)
+            act,        # M: 売買アクション (移動)
+            trade,      # N: 売買金額 (移動)
+            sec,        # O: セクター (後ろへ)
+            rb,         # P: 期待年率 (後ろへ)
         ])
 
     # dashboard matrix（A1:N10）
