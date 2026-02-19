@@ -2,8 +2,13 @@ name: Portfolio Auto Update
 
 on:
   schedule:
-    - cron: '31 6 * * 1-5'
+    # 毎日 16:33 JST (UTC 7:33) に実行
+    - cron: '33 7 * * 1-5'
   workflow_dispatch:
+
+# 60日停止回避のコミットおよびスプシ更新に必要な権限
+permissions:
+  contents: write
 
 jobs:
   update-portfolio:
@@ -12,6 +17,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 最終コミット日時の判定に全履歴が必要
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -28,3 +35,22 @@ jobs:
         env:
           APP_CONFIG: ${{ secrets.APP_CONFIG }}
         run: python main.py
+
+      - name: Keepalive Workflow (Manual Implementation)
+        # 外部アクションを使わず、シェルスクリプトで50日経過判定と空コミットを実行
+        run: |
+          LAST_COMMIT_DATE=$(git log -1 --format=%ct)
+          CURRENT_DATE=$(date +%s)
+          DIFF_DAYS=$(( (CURRENT_DATE - LAST_COMMIT_DATE) / 86400 ))
+          
+          echo "Days since last commit: $DIFF_DAYS"
+          
+          if [ $DIFF_DAYS -ge 50 ]; then
+            echo "Over 50 days passed. Sending keepalive commit."
+            git config --local user.email "github-actions[bot]@users.noreply.github.com"
+            git config --local user.name "github-actions[bot]"
+            git commit --allow-empty -m "keepalive: portfolio auto update"
+            git push
+          else
+            echo "No keepalive commit needed."
+          fi
