@@ -608,29 +608,55 @@ def main():
     alpha = ""
 
     if exec_status != "FAILED" and benchmark_fail_count == 0 and len(valid_price_rows) > 0:
-        # 日次リターンを作る
-        cols = [BENCHMARK_TICKER] + [r["ticker"] for r in valid_price_rows]
-        # close_1y から必要列を取る（無い列がある場合は欠損→dropnaで落ちる）
         try:
-            df_close = close_1y[cols].copy()
-            df_ret = df_close.pct_change()
+            # データが1年分完全に揃っていない銘柄を除外して計算する
+            df_close = close_1y.copy()
+            
+            # 各列の欠損値（NaN）の数をカウントし、欠損がある銘柄を特定
+            null_counts = df_close.isnull().sum()
+            valid_cols_for_bt = null_counts[null_counts == 0].index.tolist()
+            
+            # ベンチマークが欠損なしに含まれているか確認
+            if BENCHMARK_TICKER in valid_cols_for_bt:
+                bt_tickers = [r["ticker"] for r in valid_price_rows if r["ticker"] in valid_cols_for_bt]
+                cols = [BENCHMARK_TICKER] + bt_tickers
+                
+                # 計算対象となる有効な銘柄のみに絞る
+                df_close = df_close[cols]
+                df_ret = df_close.pct_change().dropna()
+                
+                if not df_ret.empty:
+                    # 除外された銘柄のウェイトを計算
+                    excluded_weight = sum([float(r["weight"]) for r in valid_price_rows if r["ticker"] not in bt_tickers and isinstance(r.get("weight"), float)])
+                    
+                    # 再計算用の正規化ウェイト（除外された分を全体に再配分）
+                    bt_total_weight = sum([float(r["weight"]) for r in valid_price_rows if r["ticker"] in bt_tickers and isinstance(r.get("weight"), float)])
+                    
+                    if bt_total_weight > 0:
+                        weights_dict = {r["ticker"]: float(r["weight"]) / bt_total_weight for r in valid_price_rows if r["ticker"] in bt_tickers}
+                        
+                        # PF日次リターン
+                        pf_daily = None
+                        for tk, w in weights_dict.items():
+                            if tk in df_ret.columns:
+                                s = df_ret[tk] * w
+                                pf_daily = s if pf_daily is None else (pf_daily + s)
 
-            # 仕様：いずれか欠損がある日は除外
-            df_ret = df_ret.dropna()
+                        if pf_daily is not None:
+                            pf_val = (1 + pf_daily).prod() - 1
+                            topix_val = (1 + df_ret[BENCHMARK_TICKER]).prod() - 1
+                            alpha_val = pf_val - topix_val
+                            
+                            # 除外ウェイトが20%以上の場合は (参考値) を追記
+                            if excluded_weight >= 0.20:
+                                pf_cum = f"{pf_val:.4f} (参考値)"
+                                topix_cum = f"{topix_val:.4f} (参考値)"
+                                alpha = f"{alpha_val:.4f} (参考値)"
+                            else:
+                                pf_cum = float(pf_val)
+                                topix_cum = float(topix_val)
+                                alpha = float(alpha_val)
 
-            if not df_ret.empty:
-                weights_dict = {r["ticker"]: float(r["weight"]) for r in valid_price_rows if isinstance(r.get("weight"), float)}
-                # PF日次リターン
-                pf_daily = None
-                for tk, w in weights_dict.items():
-                    if tk in df_ret.columns:
-                        s = df_ret[tk] * w
-                        pf_daily = s if pf_daily is None else (pf_daily + s)
-
-                if pf_daily is not None:
-                    pf_cum = (1 + pf_daily).prod() - 1
-                    topix_cum = (1 + df_ret[BENCHMARK_TICKER]).prod() - 1
-                    alpha = pf_cum - topix_cum
         except Exception:
             # backtestが壊れても exec_status は変えない（仕様にないため）
             pf_cum = topix_cum = alpha = ""
