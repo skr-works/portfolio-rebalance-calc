@@ -34,6 +34,40 @@ DD_CAUTION = -0.20
 DASH_RANGE = "A1:N10"
 OUT_RANGE = f"E{START_ROW}:P{MAX_ROW}" # 列が1つ減ったため、QからPに変更
 
+# history ranges (AA:AW)
+HIST_START_COL = "AA"
+HIST_END_COL = "AW"
+HIST_HEADER_RANGE = f"{HIST_START_COL}1:{HIST_END_COL}1"
+HIST_DATA_RANGE = f"{HIST_START_COL}2:{HIST_END_COL}"
+HIST_CLEAR_RANGE = f"{HIST_START_COL}:{HIST_END_COL}"
+
+HIST_HEADERS = [
+    "snapshot_date",          # AA latest_bar_date を使う
+    "updated_at_jst",         # AB
+    "total_market_value_jpy", # AC
+    "total_cost_jpy",         # AD
+    "total_pnl_jpy",          # AE
+    "total_pnl_pct",          # AF
+    "symbol_count",           # AG
+    "top1_weight",            # AH
+    "top3_weight",            # AI
+    "hhi",                    # AJ
+    "exit_count",             # AK
+    "caution_count",          # AL
+    "ok_count",               # AM
+    "pf_ret_base",            # AN
+    "pf_ret_opt",             # AO
+    "pf_ret_pess",            # AP
+    "value_10y_base_jpy",     # AQ
+    "value_10y_opt_jpy",      # AR
+    "value_10y_pess_jpy",     # AS
+    "unallocated_cash_jpy",   # AT
+    "pf_cum_1y",              # AU
+    "topix_cum_1y",           # AV
+    "alpha_1y",               # AW
+]
+HIST_COLS = len(HIST_HEADERS)
+
 # =========================
 # Utility
 # =========================
@@ -149,6 +183,67 @@ def clip(x, lo, hi):
     if x is None or (isinstance(x, float) and math.isnan(x)):
         return None
     return max(lo, min(hi, float(x)))
+
+
+def normalize_hist_row(row, size):
+    row = list(row[:size])
+    if len(row) < size:
+        row += [""] * (size - len(row))
+    return row
+
+
+def build_history_payload(ws, snapshot_date: str, history_row: list):
+    """
+    履歴は AA:AW にだけ持つ。
+    - snapshot_date は latest_bar_date を使う
+    - 同じ日付があれば上書き
+    - なければ追加
+    - 最新日付を上、古い日付を下に並べる
+    """
+    snapshot_date = str(snapshot_date).strip()
+
+    # NO_DATA や不正日付のときは履歴保存しない
+    if snapshot_date == "" or snapshot_date == "NO_DATA":
+        return None
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", snapshot_date):
+        return None
+
+    new_row = normalize_hist_row(history_row, HIST_COLS)
+    new_row[0] = snapshot_date  # 念のため固定
+
+    existing = ws.get(HIST_DATA_RANGE)
+    history_rows = []
+    replaced = False
+
+    for r in existing:
+        rr = normalize_hist_row(r, HIST_COLS)
+        if all(str(x).strip() == "" for x in rr):
+            continue
+
+        key = str(rr[0]).strip()
+        if key == snapshot_date:
+            history_rows.append(new_row)
+            replaced = True
+        else:
+            history_rows.append(rr)
+
+    if not replaced:
+        history_rows.append(new_row)
+
+    # yyyy-mm-dd なので文字列降順でOK
+    history_rows.sort(key=lambda x: str(x[0]).strip(), reverse=True)
+
+    payload = [
+        {"range": HIST_HEADER_RANGE, "values": [HIST_HEADERS]},
+    ]
+    if history_rows:
+        payload.append(
+            {
+                "range": f"{HIST_START_COL}2:{HIST_END_COL}{len(history_rows) + 1}",
+                "values": history_rows,
+            }
+        )
+    return payload
 
 
 # =========================
@@ -754,15 +849,53 @@ def main():
     set_cell(dash, "M7", int(error_count))
 
     # -------------------------
+    # 10.5) Build history row (AA:AW)
+    # -------------------------
+    history_row = [
+        latest_bar,                              # AA snapshot_date (latest_bar_date)
+        now_jst.strftime("%Y-%m-%d %H:%M:%S"),   # AB updated_at_jst
+        int(total_market_value),                 # AC
+        int(total_cost),                         # AD
+        int(total_pnl),                          # AE
+        float(total_pnl_pct),                    # AF
+        int(symbol_count),                       # AG
+        float(top1),                             # AH
+        float(top3),                             # AI
+        float(hhi),                              # AJ
+        int(cnt_exit),                           # AK
+        int(cnt_caution),                        # AL
+        int(cnt_ok),                             # AM
+        float(pf_ret_base),                      # AN
+        float(pf_ret_opt),                       # AO
+        float(pf_ret_pess),                      # AP
+        int(value_10y_base),                     # AQ
+        int(value_10y_opt),                      # AR
+        int(value_10y_pess),                     # AS
+        int(unallocated_cash),                   # AT
+        pf_cum,                                  # AU
+        topix_cum,                               # AV
+        alpha,                                   # AW
+    ]
+
+    history_payload = build_history_payload(ws, latest_bar, history_row)
+
+    # -------------------------
     # 11) Write to sheet (clear -> write)
     # -------------------------
-    ws.batch_clear([DASH_RANGE, OUT_RANGE])
+    clear_ranges = [DASH_RANGE, OUT_RANGE]
+    update_payload = [
+        {"range": DASH_RANGE, "values": dash},
+        {"range": OUT_RANGE, "values": output_matrix},
+    ]
+
+    if history_payload is not None:
+        clear_ranges.append(HIST_CLEAR_RANGE)
+        update_payload.extend(history_payload)
+
+    ws.batch_clear(clear_ranges)
 
     ws.batch_update(
-        [
-            {"range": DASH_RANGE, "values": dash},
-            {"range": OUT_RANGE, "values": output_matrix},
-        ],
+        update_payload,
         value_input_option="RAW",
     )
 
