@@ -39,7 +39,7 @@ HIST_START_COL = "AA"
 HIST_END_COL = "AW"
 HIST_HEADER_RANGE = f"{HIST_START_COL}1:{HIST_END_COL}1"
 HIST_DATA_RANGE = f"{HIST_START_COL}2:{HIST_END_COL}"
-HIST_CLEAR_RANGE = f"{HIST_START_COL}:{HIST_END_COL}"
+HIST_CLEAR_RANGE = f"{HIST_START_COL}2:{HIST_END_COL}"
 
 HIST_HEADERS = [
     "snapshot_date",          # AA latest_bar_date を使う
@@ -233,9 +233,7 @@ def build_history_payload(ws, snapshot_date: str, history_row: list):
     # yyyy-mm-dd なので文字列降順でOK
     history_rows.sort(key=lambda x: str(x[0]).strip(), reverse=True)
 
-    payload = [
-        {"range": HIST_HEADER_RANGE, "values": [HIST_HEADERS]},
-    ]
+    payload = []
     if history_rows:
         payload.append(
             {
