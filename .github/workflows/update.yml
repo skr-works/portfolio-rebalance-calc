@@ -2,8 +2,8 @@ name: Portfolio Auto Update
 
 on:
   schedule:
-    # 毎日 16:33 JST (UTC 7:33) に実行
-    - cron: '33 7 * * 1-5'
+    # 毎日 16:08 JST (UTC 7:33) に実行
+    - cron: '08 7 * * 1-5'
   workflow_dispatch:
 
 # 60日停止回避のコミットおよびスプシ更新に必要な権限
