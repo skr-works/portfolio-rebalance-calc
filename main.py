@@ -31,7 +31,7 @@ DD_EXIT = -0.30
 DD_CAUTION = -0.20
 
 # output ranges
-DASH_RANGE = "A1:P10"
+DASH_RANGE = "A1:P11"
 OUT_RANGE = f"E{START_ROW}:T{MAX_ROW}"  # E..P 既存出力 + Q..T 初回観測系4列
 
 # observation columns (Q:T)
@@ -188,13 +188,13 @@ def extract_price_df(dl: pd.DataFrame, tickers: list, field: str, fallback_field
 
 
 def build_dashboard_matrix():
-    # 10 rows x 16 cols (A..P)
-    return [["" for _ in range(16)] for __ in range(10)]
+    # 11 rows x 16 cols (A..P)
+    return [["" for _ in range(16)] for __ in range(11)]
 
 
 def set_cell(mat, a1: str, value):
     """
-    A1形式（A1〜P10）だけを対象にセットする。
+    A1形式（A1〜P11）だけを対象にセットする。
     """
     col_letters = re.match(r"^([A-P]+)", a1).group(1)
     row_num = int(re.match(r"^[A-P]+(\d+)$", a1).group(1))
@@ -205,7 +205,7 @@ def set_cell(mat, a1: str, value):
         raise ValueError(f"Invalid column: {col_letters}")
     c = col_map[col_letters]
     r = row_num - 1
-    if not (0 <= r < 10 and 0 <= c < 16):
+    if not (0 <= r < 11 and 0 <= c < 16):
         raise ValueError(f"Cell out of dashboard range: {a1}")
 
     mat[r][c] = value
@@ -508,6 +508,7 @@ def main():
     close_5d = pd.DataFrame()
     close_1y = pd.DataFrame()
     close_1y_adjusted = pd.DataFrame()
+    close_1y_return = pd.DataFrame()
     close_3y = pd.DataFrame()
 
     try:
@@ -542,6 +543,23 @@ def main():
         close_1y_adjusted = pd.DataFrame()
 
     try:
+        # 1年PF/TOPIXリターン用。auto_adjust=True の Close は分割・配当調整後の時系列になる。
+        # 1306.Tの受益権分割のようなケースで、通常Close比較による異常値を避ける。
+        dl_1y_return = yf.download(
+            tickers=all_tickers_for_price,
+            period="1y",
+            interval="1d",
+            group_by="column",
+            auto_adjust=True,
+            threads=True,
+            progress=False,
+        )
+        tickers_for_df = [all_tickers_for_price[0]] if len(all_tickers_for_price) == 1 else all_tickers_for_price
+        close_1y_return = extract_close_df(dl_1y_return, tickers_for_df)
+    except Exception:
+        close_1y_return = pd.DataFrame()
+
+    try:
         dl_3y = yf.download(
             tickers=all_tickers_for_price,
             period="3y",
@@ -566,8 +584,13 @@ def main():
     except Exception:
         latest_bar = "NO_DATA"
 
-    # benchmark availability（1年リターンは分割調整後価格を優先）
-    return_1y_df = close_1y_adjusted if not close_1y_adjusted.empty else close_1y
+    # benchmark availability（1年リターンは auto_adjust=True の調整後Closeを最優先）
+    if not close_1y_return.empty:
+        return_1y_df = close_1y_return
+    elif not close_1y_adjusted.empty:
+        return_1y_df = close_1y_adjusted
+    else:
+        return_1y_df = close_1y
     benchmark_fail_count = 0
     if BENCHMARK_TICKER not in return_1y_df.columns or return_1y_df[BENCHMARK_TICKER].dropna().empty:
         benchmark_fail_count = 1
@@ -854,18 +877,34 @@ def main():
     if exec_status != "FAILED" and len(valid_price_rows) > 0:
         try:
             # TOPIXの1年リターン（ベンチマーク）
-            # 1306.Tの受益権分割影響を避けるため、分割調整後価格を優先する。
+            # 1306.Tの受益権分割影響を避けるため、auto_adjust=True の調整後Closeを優先する。
+            topix_val = None
             if benchmark_fail_count == 0 and BENCHMARK_TICKER in return_1y_df.columns:
                 bm_series = return_1y_df[BENCHMARK_TICKER].dropna()
                 if len(bm_series) >= 2:
-                    topix_val = (bm_series.iloc[-1] / bm_series.iloc[0]) - 1
-                    # 異常値ガード。ここで無効化しても実行ステータス・エラー件数には影響させない。
-                    if topix_val <= -0.5 or topix_val >= 1.0:
-                        topix_val = None
-                else:
+                    tmp_topix_val = (bm_series.iloc[-1] / bm_series.iloc[0]) - 1
+                    # 異常値ガード。通常のTOPIX連動ETFで1年 -50%以下 / +100%以上は
+                    # 分割未調整データを拾った可能性が高いので、個別取得で再確認する。
+                    if -0.5 < tmp_topix_val < 1.0:
+                        topix_val = float(tmp_topix_val)
+
+            # 一括取得側で調整済みデータを拾えない場合の保険。
+            # ここだけ個別に auto_adjust=True で取り直し、分割調整済みCloseで計算する。
+            if topix_val is None:
+                try:
+                    bm_hist = yf.Ticker(BENCHMARK_TICKER).history(
+                        period="1y",
+                        interval="1d",
+                        auto_adjust=True,
+                    )
+                    if bm_hist is not None and not bm_hist.empty and "Close" in bm_hist.columns:
+                        bm_series2 = bm_hist["Close"].dropna()
+                        if len(bm_series2) >= 2:
+                            tmp_topix_val2 = (bm_series2.iloc[-1] / bm_series2.iloc[0]) - 1
+                            if -0.5 < tmp_topix_val2 < 1.0:
+                                topix_val = float(tmp_topix_val2)
+                except Exception:
                     topix_val = None
-            else:
-                topix_val = None
 
             # PFリターンの計算（各銘柄の1年リターン × ウェイト）
             pf_val = 0.0
@@ -954,7 +993,7 @@ def main():
             row.get("q3_judgement", ""),        # T: 3か月判定
         ])
 
-    # dashboard matrix（A1:P10）
+    # dashboard matrix（A1:P11）
     dash = build_dashboard_matrix()
 
     # labels（固定）
@@ -962,11 +1001,11 @@ def main():
         "A1": "更新日時(JST)", "A2": "総評価額(JPY)", "A3": "総取得額(JPY)", "A4": "総損益(JPY)", "A5": "総損益(%)", "A6": "銘柄数",
         "D2": "上位1銘柄ウェイト(%)", "D3": "上位3銘柄ウェイト合計(%)", "D4": "HHI(銘柄集中度)", "D5": "EXIT銘柄数", "D6": "CAUTION銘柄数", "D7": "OK銘柄数",
         "D8": "要注意Top1", "D9": "要注意Top2", "D10": "要注意Top3",
-        "H2": "期待年率(base)", "H3": "期待年率(opt)", "H4": "期待年率(pess)", "H8": "リバランス余剰現金(概算)",
+        "H2": "期待年率(base)", "H3": "期待年率(opt)", "H4": "期待年率(pess)", "H5": "リバランス余剰現金(概算)",
+        "H6": "好調銘柄数", "H7": "不調銘柄数", "H8": "好調ウェイト合計",
+        "H9": "不調ウェイト合計", "H10": "24か月以上不調数", "H11": "株数増加銘柄数",
         "L2": "過去1年PFリターン", "L3": "過去1年TOPIXリターン", "L4": "α(PF-TOPIX)",
         "L5": "価格データ時刻", "L6": "実行ステータス", "L7": "エラー件数",
-        "O2": "好調銘柄数", "O3": "不調銘柄数", "O4": "好調ウェイト合計",
-        "O5": "不調ウェイト合計", "O6": "24か月以上不調数", "O7": "株数増加銘柄数",
     }
     for k, v in labels.items():
         set_cell(dash, k, v)
@@ -1015,7 +1054,13 @@ def main():
     set_cell(dash, "I2", float(pf_ret_base))
     set_cell(dash, "I3", float(pf_ret_opt))
     set_cell(dash, "I4", float(pf_ret_pess))
-    set_cell(dash, "I8", int(unallocated_cash))
+    set_cell(dash, "I5", int(unallocated_cash))
+    set_cell(dash, "I6", int(good_count))
+    set_cell(dash, "I7", int(poor_count))
+    set_cell(dash, "I8", float(good_weight_sum))
+    set_cell(dash, "I9", float(poor_weight_sum))
+    set_cell(dash, "I10", int(poor_24m_count))
+    set_cell(dash, "I11", int(increased_qty_count))
 
     set_cell(dash, "M2", pf_cum)
     set_cell(dash, "M3", topix_cum)
@@ -1024,12 +1069,6 @@ def main():
     set_cell(dash, "M6", exec_status)
     set_cell(dash, "M7", int(error_count))
 
-    set_cell(dash, "P2", int(good_count))
-    set_cell(dash, "P3", int(poor_count))
-    set_cell(dash, "P4", float(good_weight_sum))
-    set_cell(dash, "P5", float(poor_weight_sum))
-    set_cell(dash, "P6", int(poor_24m_count))
-    set_cell(dash, "P7", int(increased_qty_count))
 
     # -------------------------
     # 10.5) Build history row (AA:AW)
