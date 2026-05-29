@@ -90,10 +90,13 @@ def get_gspread_client():
 
 
 def parse_ticker(code: str):
-    code = str(code).strip()
-    if re.match(r"^\d{4}$", code):
+    code = str(code).strip().upper()
+
+    # JPXの新証券コード体系に対応
+    # 例: 8053 -> 8053.T / 456A -> 456A.T / 456A.T -> 456A.T
+    if re.match(r"^[0-9A-Z]{4}$", code):
         return f"{code}.T"
-    if re.match(r"^\d{4}\.T$", code):
+    if re.match(r"^[0-9A-Z]{4}\.T$", code):
         return code
     return None
 
