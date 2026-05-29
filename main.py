@@ -16,7 +16,7 @@ from google.oauth2.service_account import Credentials
 START_ROW = 14
 MAX_ROW = 2000
 
-BENCHMARK_TICKER = "1306.T"
+BENCHMARK_TICKERS = ["1308.T", "1305.T", "1348.T"]
 
 # rebalance固定パラメータ
 MAX_SINGLE_WEIGHT = 0.15
@@ -314,6 +314,65 @@ def calc_3mo_judgement(observed_months, pnl_pct):
     return f"{lower_month}〜{upper_month}か月：{label}"
 
 
+def calc_valid_1y_return(series, min_ret=-0.5, max_ret=1.0):
+    """
+    1年リターンを計算する。
+    分割未調整などで極端な値になった場合は None を返す。
+    """
+    if series is None:
+        return None
+    try:
+        s = series.dropna()
+        if len(s) < 2:
+            return None
+        p0 = float(s.iloc[0])
+        p1 = float(s.iloc[-1])
+        if p0 <= 0 or p1 <= 0:
+            return None
+        ret = (p1 / p0) - 1
+        if not (min_ret < ret < max_ret):
+            return None
+        return float(ret)
+    except Exception:
+        return None
+
+
+def pick_benchmark_return(return_df: pd.DataFrame, benchmark_tickers: list):
+    """
+    TOPIX系ETFの候補から、優先順に正常な1年リターンが取れた最初の銘柄を採用する。
+    複数銘柄の平均は取らない。
+    """
+    if return_df is None or return_df.empty:
+        return None, None
+
+    for tk in benchmark_tickers:
+        if tk not in return_df.columns:
+            continue
+        ret = calc_valid_1y_return(return_df[tk])
+        if ret is not None:
+            return tk, ret
+
+    return None, None
+
+
+def fetch_single_benchmark_return(ticker: str):
+    """
+    一括取得で取れなかった場合の保険。
+    auto_adjust=True のCloseで1年リターンを計算する。
+    """
+    try:
+        hist = yf.Ticker(ticker).history(
+            period="1y",
+            interval="1d",
+            auto_adjust=True,
+        )
+        if hist is None or hist.empty or "Close" not in hist.columns:
+            return None
+        return calc_valid_1y_return(hist["Close"])
+    except Exception:
+        return None
+
+
 def build_history_payload(ws, snapshot_date: str, history_row: list):
     """
     履歴は AA:AW にだけ持つ。
@@ -500,9 +559,9 @@ def main():
     # 仕様：current_price は history(period="5d", interval="1d") 最新Close
     # 仕様：health/forecast は Close、1年PF/TOPIXリターンは分割調整後価格を優先
 
-    all_tickers_for_price = unique_tickers[:]  # copy
-    # ベンチも含めて一括で落とす
-    all_tickers_for_price.append(BENCHMARK_TICKER)
+    # ベンチ候補も含めて一括で落とす
+    # TOPIX系ベンチマークは、優先順に正常な1年リターンが取れた最初の銘柄を採用する。
+    all_tickers_for_price = sorted(set(unique_tickers + BENCHMARK_TICKERS))
 
     # yfinance download
     close_5d = pd.DataFrame()
@@ -591,9 +650,19 @@ def main():
         return_1y_df = close_1y_adjusted
     else:
         return_1y_df = close_1y
-    benchmark_fail_count = 0
-    if BENCHMARK_TICKER not in return_1y_df.columns or return_1y_df[BENCHMARK_TICKER].dropna().empty:
-        benchmark_fail_count = 1
+
+    selected_benchmark_ticker, topix_val = pick_benchmark_return(return_1y_df, BENCHMARK_TICKERS)
+
+    # 一括取得で正常な値が取れない場合は、候補を優先順に個別取得する。
+    if topix_val is None:
+        for bm_ticker in BENCHMARK_TICKERS:
+            ret = fetch_single_benchmark_return(bm_ticker)
+            if ret is not None:
+                selected_benchmark_ticker = bm_ticker
+                topix_val = ret
+                break
+
+    benchmark_fail_count = 0 if topix_val is not None else 1
 
     # -------------------------
     # 3) info fetch (dividendYield, sector) - fail-safe
@@ -876,35 +945,7 @@ def main():
 
     if exec_status != "FAILED" and len(valid_price_rows) > 0:
         try:
-            # TOPIXの1年リターン（ベンチマーク）
-            # 1306.Tの受益権分割影響を避けるため、auto_adjust=True の調整後Closeを優先する。
-            topix_val = None
-            if benchmark_fail_count == 0 and BENCHMARK_TICKER in return_1y_df.columns:
-                bm_series = return_1y_df[BENCHMARK_TICKER].dropna()
-                if len(bm_series) >= 2:
-                    tmp_topix_val = (bm_series.iloc[-1] / bm_series.iloc[0]) - 1
-                    # 異常値ガード。通常のTOPIX連動ETFで1年 -50%以下 / +100%以上は
-                    # 分割未調整データを拾った可能性が高いので、個別取得で再確認する。
-                    if -0.5 < tmp_topix_val < 1.0:
-                        topix_val = float(tmp_topix_val)
-
-            # 一括取得側で調整済みデータを拾えない場合の保険。
-            # ここだけ個別に auto_adjust=True で取り直し、分割調整済みCloseで計算する。
-            if topix_val is None:
-                try:
-                    bm_hist = yf.Ticker(BENCHMARK_TICKER).history(
-                        period="1y",
-                        interval="1d",
-                        auto_adjust=True,
-                    )
-                    if bm_hist is not None and not bm_hist.empty and "Close" in bm_hist.columns:
-                        bm_series2 = bm_hist["Close"].dropna()
-                        if len(bm_series2) >= 2:
-                            tmp_topix_val2 = (bm_series2.iloc[-1] / bm_series2.iloc[0]) - 1
-                            if -0.5 < tmp_topix_val2 < 1.0:
-                                topix_val = float(tmp_topix_val2)
-                except Exception:
-                    topix_val = None
+            # TOPIX系ベンチマークの1年リターンは事前にフォールバック選定済み。
 
             # PFリターンの計算（各銘柄の1年リターン × ウェイト）
             pf_val = 0.0
@@ -997,6 +1038,7 @@ def main():
     dash = build_dashboard_matrix()
 
     # labels（固定）
+    benchmark_label_suffix = f"({selected_benchmark_ticker})" if selected_benchmark_ticker else ""
     labels = {
         "A1": "更新日時(JST)", "A2": "総評価額(JPY)", "A3": "総取得額(JPY)", "A4": "総損益(JPY)", "A5": "総損益(%)", "A6": "銘柄数",
         "D2": "上位1銘柄ウェイト(%)", "D3": "上位3銘柄ウェイト合計(%)", "D4": "HHI(銘柄集中度)", "D5": "EXIT銘柄数", "D6": "CAUTION銘柄数", "D7": "OK銘柄数",
@@ -1004,7 +1046,7 @@ def main():
         "H2": "期待年率(base)", "H3": "期待年率(opt)", "H4": "期待年率(pess)", "H5": "リバランス余剰現金(概算)",
         "H6": "好調銘柄数", "H7": "不調銘柄数", "H8": "好調ウェイト合計",
         "H9": "不調ウェイト合計", "H10": "24か月以上不調数", "H11": "株数増加銘柄数",
-        "L2": "過去1年PFリターン", "L3": "過去1年TOPIXリターン", "L4": "α(PF-TOPIX)",
+        "L2": "過去1年PFリターン", "L3": f"過去1年TOPIX系{benchmark_label_suffix}", "L4": f"α(PF-TOPIX系{benchmark_label_suffix})",
         "L5": "価格データ時刻", "L6": "実行ステータス", "L7": "エラー件数",
     }
     for k, v in labels.items():
