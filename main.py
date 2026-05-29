@@ -31,7 +31,7 @@ DD_EXIT = -0.30
 DD_CAUTION = -0.20
 
 # output ranges
-DASH_RANGE = "A1:P11"
+DASH_RANGE = "A1:M11"
 OUT_RANGE = f"E{START_ROW}:T{MAX_ROW}"  # E..P 既存出力 + Q..T 初回観測系4列
 
 # observation columns (Q:T)
@@ -188,24 +188,24 @@ def extract_price_df(dl: pd.DataFrame, tickers: list, field: str, fallback_field
 
 
 def build_dashboard_matrix():
-    # 11 rows x 16 cols (A..P)
-    return [["" for _ in range(16)] for __ in range(11)]
+    # 11 rows x 13 cols (A..M)
+    return [["" for _ in range(13)] for __ in range(11)]
 
 
 def set_cell(mat, a1: str, value):
     """
-    A1形式（A1〜P11）だけを対象にセットする。
+    A1形式（A1〜M11）だけを対象にセットする。
     """
-    col_letters = re.match(r"^([A-P]+)", a1).group(1)
-    row_num = int(re.match(r"^[A-P]+(\d+)$", a1).group(1))
+    col_letters = re.match(r"^([A-M]+)", a1).group(1)
+    row_num = int(re.match(r"^[A-M]+(\d+)$", a1).group(1))
 
-    # A=0 ... P=15
-    col_map = {chr(ord("A") + i): i for i in range(16)}
+    # A=0 ... M=12
+    col_map = {chr(ord("A") + i): i for i in range(13)}
     if col_letters not in col_map:
         raise ValueError(f"Invalid column: {col_letters}")
     c = col_map[col_letters]
     r = row_num - 1
-    if not (0 <= r < 11 and 0 <= c < 16):
+    if not (0 <= r < 11 and 0 <= c < 13):
         raise ValueError(f"Cell out of dashboard range: {a1}")
 
     mat[r][c] = value
@@ -993,7 +993,7 @@ def main():
             row.get("q3_judgement", ""),        # T: 3か月判定
         ])
 
-    # dashboard matrix（A1:P11）
+    # dashboard matrix（A1:M11）
     dash = build_dashboard_matrix()
 
     # labels（固定）
