@@ -32,7 +32,11 @@ DD_CAUTION = -0.20
 
 # output ranges
 DASH_RANGE = "A1:N10"
-OUT_RANGE = f"E{START_ROW}:P{MAX_ROW}" # 列が1つ減ったため、QからPに変更
+OUT_RANGE = f"E{START_ROW}:T{MAX_ROW}"  # E..P 既存出力 + Q..T 初回観測系4列
+
+# observation columns (Q:T)
+OBS_HEADER_RANGE = "Q13:T13"
+OBS_HEADERS = ["初回観測日", "初回観測数量", "観測保有年月数", "3か月判定"]
 
 # history ranges (AA:AW)
 HIST_START_COL = "AA"
@@ -192,6 +196,96 @@ def normalize_hist_row(row, size):
     return row
 
 
+def normalize_yyyymmdd(value):
+    """
+    yyyymmdd / yyyy-mm-dd / yyyy/mm/dd を yyyymmdd に正規化する。
+    不正値は空文字にする。
+    """
+    s = "" if value is None else str(value).strip()
+    if s == "":
+        return ""
+    digits = re.sub(r"\D", "", s)
+    if len(digits) != 8:
+        return ""
+    try:
+        datetime.strptime(digits, "%Y%m%d")
+        return digits
+    except Exception:
+        return ""
+
+
+def format_qty(value):
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return ""
+    try:
+        v = float(value)
+        if v.is_integer():
+            return int(v)
+        return v
+    except Exception:
+        return value
+
+
+def calc_observed_months(first_seen_yyyymmdd: str, now_jst: datetime):
+    first_seen_yyyymmdd = normalize_yyyymmdd(first_seen_yyyymmdd)
+    if first_seen_yyyymmdd == "":
+        return None
+    try:
+        d0 = datetime.strptime(first_seen_yyyymmdd, "%Y%m%d").date()
+        d1 = now_jst.date()
+        months = (d1.year - d0.year) * 12 + (d1.month - d0.month)
+        if d1.day < d0.day:
+            months -= 1
+        return max(0, int(months))
+    except Exception:
+        return None
+
+
+def format_observed_ym(observed_months):
+    if observed_months is None:
+        return "未観測"
+    y = int(observed_months) // 12
+    m = int(observed_months) % 12
+    return f"{y}年{m}か月"
+
+
+def calc_3mo_judgement(observed_months, pnl_pct):
+    """
+    3か月単位で、不調 / 普通 / 好調 を判定する。
+    - 不調: 損益率 0%未満
+    - 好調: 年率10%相当の3か月換算ライン以上
+    - 普通: 0%以上、好調ライン未満
+    """
+    if observed_months is None:
+        return "判定不能"
+    if pnl_pct is None or pnl_pct == "":
+        return "判定不能"
+
+    try:
+        m = max(0, int(observed_months))
+        pnl_pct_value = float(pnl_pct) * 100.0
+    except Exception:
+        return "判定不能"
+
+    if m <= 3:
+        lower_month = 0
+        upper_month = 3
+    else:
+        upper_month = int(math.ceil(m / 3.0) * 3)
+        lower_month = upper_month - 3
+
+    good_line = upper_month / 12.0 * 10.0
+
+    if pnl_pct_value < 0:
+        label = "不調"
+    elif pnl_pct_value >= good_line:
+        label = "好調"
+    else:
+        label = "普通"
+
+    return f"{lower_month}〜{upper_month}か月：{label}"
+
+
 def build_history_payload(ws, snapshot_date: str, history_row: list):
     """
     履歴は AA:AW にだけ持つ。
@@ -272,7 +366,7 @@ def main():
     sh = client.open_by_key(sheet_id)
     ws = sh.worksheet(sheet_name)
 
-    raw_data = ws.get(f"A{START_ROW}:D{MAX_ROW}")  # list[list[str]]
+    raw_data = ws.get(f"A{START_ROW}:T{MAX_ROW}")  # list[list[str]]
 
     # rows: 14..2000 を全て保持（出力行数固定のため）
     total_rows = MAX_ROW - START_ROW + 1
@@ -300,7 +394,15 @@ def main():
             "shares": None,
             "cost": None,
             "ticker": None,
+            "first_seen_date": "",
+            "first_seen_qty": "",
+            "observed_months": None,
+            "observed_holding_ym": "",
+            "q3_judgement": "",
         }
+
+        existing_first_seen_date = row_data[16] if len(row_data) > 16 else ""
+        existing_first_seen_qty = row_data[17] if len(row_data) > 17 else ""
 
         tk = parse_ticker(code)
         if tk is None:
@@ -338,9 +440,24 @@ def main():
             rows.append(info)
             continue
 
+        first_seen_date = normalize_yyyymmdd(existing_first_seen_date)
+        if first_seen_date == "":
+            first_seen_date = now_jst.strftime("%Y%m%d")
+
+        first_seen_qty = str(existing_first_seen_qty).strip()
+        if first_seen_qty == "":
+            first_seen_qty = format_qty(shares)
+
+        observed_months = calc_observed_months(first_seen_date, now_jst)
+
         info["ticker"] = tk
         info["shares"] = float(shares)
         info["cost"] = float(cost)
+        info["first_seen_date"] = first_seen_date
+        info["first_seen_qty"] = first_seen_qty
+        info["observed_months"] = observed_months
+        info["observed_holding_ym"] = format_observed_ym(observed_months)
+        info["q3_judgement"] = "判定不能"
 
         tickers.append(tk)
         rows.append(info)
@@ -492,6 +609,7 @@ def main():
         row["cost_value"] = cost_value
         row["pnl_jpy"] = pnl_jpy
         row["pnl_pct"] = pnl_pct
+        row["q3_judgement"] = calc_3mo_judgement(row.get("observed_months"), pnl_pct)
 
         total_market_value += market_value
 
@@ -742,11 +860,11 @@ def main():
     # -------------------------
     # 10) Build output matrices
     # -------------------------
-    # E..P = 12 columns (tickerを削除し、ヘルスとアクションを左に移動)
+    # E..T = 16 columns（E..P 既存出力 + Q..T 初回観測系4列）
     output_matrix = []
     for row in rows:
         if row.get("is_empty"):
-            output_matrix.append([""] * 12)
+            output_matrix.append([""] * 16)
             continue
 
         if row.get("status") != "OK":
@@ -755,7 +873,11 @@ def main():
                 "", "", "", "", "", "",            # E..J
                 "DATA_NG",                         # K (health_level)
                 str(row.get("health_reason", "")), # L (health_reason)
-                "", "", "", ""                     # M..P
+                "", "", "", "",                    # M..P
+                row.get("first_seen_date", ""),     # Q: 初回観測日
+                row.get("first_seen_qty", ""),      # R: 初回観測数量
+                row.get("observed_holding_ym", ""), # S: 観測保有年月数
+                row.get("q3_judgement", ""),        # T: 3か月判定
             ])
             continue
 
@@ -787,8 +909,12 @@ def main():
             hr,         # L: 判定理由 (移動)
             act,        # M: 売買アクション (移動)
             trade,      # N: 売買金額 (移動)
-            sec,        # O: セクター (後ろへ)
-            rb,         # P: 期待年率 (後ろへ)
+            sec,                                # O: セクター (後ろへ)
+            rb,                                 # P: 期待年率 (後ろへ)
+            row.get("first_seen_date", ""),     # Q: 初回観測日
+            row.get("first_seen_qty", ""),      # R: 初回観測数量
+            row.get("observed_holding_ym", ""), # S: 観測保有年月数
+            row.get("q3_judgement", ""),        # T: 3か月判定
         ])
 
     # dashboard matrix（A1:N10）
@@ -883,6 +1009,7 @@ def main():
     clear_ranges = [DASH_RANGE, OUT_RANGE]
     update_payload = [
         {"range": DASH_RANGE, "values": dash},
+        {"range": OBS_HEADER_RANGE, "values": [OBS_HEADERS]},
         {"range": OUT_RANGE, "values": output_matrix},
     ]
 
