@@ -31,7 +31,7 @@ DD_EXIT = -0.30
 DD_CAUTION = -0.20
 
 # output ranges
-DASH_RANGE = "A1:N10"
+DASH_RANGE = "A1:P10"
 OUT_RANGE = f"E{START_ROW}:T{MAX_ROW}"  # E..P 既存出力 + Q..T 初回観測系4列
 
 # observation columns (Q:T)
@@ -159,25 +159,53 @@ def extract_close_df(dl: pd.DataFrame, tickers: list):
         return close
 
 
+def extract_price_df(dl: pd.DataFrame, tickers: list, field: str, fallback_field: str = None):
+    """
+    yf.download の返り値から指定フィールドの DataFrame（列=ticker）を返す。
+    Adj Close が取れない場合は fallback_field にフォールバックする。
+    """
+    if dl is None or dl.empty:
+        return pd.DataFrame()
+
+    if isinstance(dl.columns, pd.MultiIndex):
+        if field in dl.columns.get_level_values(0):
+            return dl[field].copy()
+        if field in dl.columns.get_level_values(1):
+            return dl.xs(field, level=1, axis=1).copy()
+        if fallback_field:
+            return extract_price_df(dl, tickers, fallback_field, None)
+        return pd.DataFrame()
+
+    if field in dl.columns:
+        price = dl[[field]].copy()
+        price.columns = [tickers[0]]
+        return price
+    if fallback_field and fallback_field in dl.columns:
+        price = dl[[fallback_field]].copy()
+        price.columns = [tickers[0]]
+        return price
+    return pd.DataFrame()
+
+
 def build_dashboard_matrix():
-    # 10 rows x 14 cols (A..N)
-    return [["" for _ in range(14)] for __ in range(10)]
+    # 10 rows x 16 cols (A..P)
+    return [["" for _ in range(16)] for __ in range(10)]
 
 
 def set_cell(mat, a1: str, value):
     """
-    A1形式（A1〜N10）だけを対象にセットする。
+    A1形式（A1〜P10）だけを対象にセットする。
     """
-    col_letters = re.match(r"^([A-N]+)", a1).group(1)
-    row_num = int(re.match(r"^[A-N]+(\d+)$", a1).group(1))
+    col_letters = re.match(r"^([A-P]+)", a1).group(1)
+    row_num = int(re.match(r"^[A-P]+(\d+)$", a1).group(1))
 
-    # A=0 ... N=13
-    col_map = {chr(ord("A") + i): i for i in range(14)}
+    # A=0 ... P=15
+    col_map = {chr(ord("A") + i): i for i in range(16)}
     if col_letters not in col_map:
         raise ValueError(f"Invalid column: {col_letters}")
     c = col_map[col_letters]
     r = row_num - 1
-    if not (0 <= r < 10 and 0 <= c < 14):
+    if not (0 <= r < 10 and 0 <= c < 16):
         raise ValueError(f"Cell out of dashboard range: {a1}")
 
     mat[r][c] = value
@@ -470,7 +498,7 @@ def main():
     # 2) yfinance fetch (batch)
     # -------------------------
     # 仕様：current_price は history(period="5d", interval="1d") 最新Close
-    # 仕様：health/backtest/forecast は Close のみ利用
+    # 仕様：health/forecast は Close、1年PF/TOPIXリターンは分割調整後価格を優先
 
     all_tickers_for_price = unique_tickers[:]  # copy
     # ベンチも含めて一括で落とす
@@ -479,6 +507,7 @@ def main():
     # yfinance download
     close_5d = pd.DataFrame()
     close_1y = pd.DataFrame()
+    close_1y_adjusted = pd.DataFrame()
     close_3y = pd.DataFrame()
 
     try:
@@ -505,9 +534,12 @@ def main():
             threads=True,
             progress=False,
         )
-        close_1y = extract_close_df(dl_1y, [all_tickers_for_price[0]] if len(all_tickers_for_price) == 1 else all_tickers_for_price)
+        tickers_for_df = [all_tickers_for_price[0]] if len(all_tickers_for_price) == 1 else all_tickers_for_price
+        close_1y = extract_close_df(dl_1y, tickers_for_df)
+        close_1y_adjusted = extract_price_df(dl_1y, tickers_for_df, "Adj Close", "Close")
     except Exception:
         close_1y = pd.DataFrame()
+        close_1y_adjusted = pd.DataFrame()
 
     try:
         dl_3y = yf.download(
@@ -534,9 +566,10 @@ def main():
     except Exception:
         latest_bar = "NO_DATA"
 
-    # benchmark availability
+    # benchmark availability（1年リターンは分割調整後価格を優先）
+    return_1y_df = close_1y_adjusted if not close_1y_adjusted.empty else close_1y
     benchmark_fail_count = 0
-    if BENCHMARK_TICKER not in close_1y.columns or close_1y[BENCHMARK_TICKER].dropna().empty:
+    if BENCHMARK_TICKER not in return_1y_df.columns or return_1y_df[BENCHMARK_TICKER].dropna().empty:
         benchmark_fail_count = 1
 
     # -------------------------
@@ -821,10 +854,14 @@ def main():
     if exec_status != "FAILED" and len(valid_price_rows) > 0:
         try:
             # TOPIXの1年リターン（ベンチマーク）
-            if benchmark_fail_count == 0 and BENCHMARK_TICKER in close_1y.columns:
-                bm_series = close_1y[BENCHMARK_TICKER].dropna()
+            # 1306.Tの受益権分割影響を避けるため、分割調整後価格を優先する。
+            if benchmark_fail_count == 0 and BENCHMARK_TICKER in return_1y_df.columns:
+                bm_series = return_1y_df[BENCHMARK_TICKER].dropna()
                 if len(bm_series) >= 2:
                     topix_val = (bm_series.iloc[-1] / bm_series.iloc[0]) - 1
+                    # 異常値ガード。ここで無効化しても実行ステータス・エラー件数には影響させない。
+                    if topix_val <= -0.5 or topix_val >= 1.0:
+                        topix_val = None
                 else:
                     topix_val = None
             else:
@@ -838,8 +875,8 @@ def main():
                 tk = r["ticker"]
                 w = float(r.get("weight", 0.0))
                 
-                if tk in close_1y.columns:
-                    s = close_1y[tk].dropna()
+                if tk in return_1y_df.columns:
+                    s = return_1y_df[tk].dropna()
                     if len(s) >= 2:
                         ret_1y = (s.iloc[-1] / s.iloc[0]) - 1
                         pf_val += ret_1y * w
@@ -917,7 +954,7 @@ def main():
             row.get("q3_judgement", ""),        # T: 3か月判定
         ])
 
-    # dashboard matrix（A1:N10）
+    # dashboard matrix（A1:P10）
     dash = build_dashboard_matrix()
 
     # labels（固定）
@@ -925,10 +962,11 @@ def main():
         "A1": "更新日時(JST)", "A2": "総評価額(JPY)", "A3": "総取得額(JPY)", "A4": "総損益(JPY)", "A5": "総損益(%)", "A6": "銘柄数",
         "D2": "上位1銘柄ウェイト(%)", "D3": "上位3銘柄ウェイト合計(%)", "D4": "HHI(銘柄集中度)", "D5": "EXIT銘柄数", "D6": "CAUTION銘柄数", "D7": "OK銘柄数",
         "D8": "要注意Top1", "D9": "要注意Top2", "D10": "要注意Top3",
-        "H2": "期待年率(base)", "H3": "期待年率(opt)", "H4": "期待年率(pess)",
-        "H5": "10年後価値(base)", "H6": "10年後価値(opt)", "H7": "10年後価値(pess)", "H8": "リバランス余剰現金(概算)",
+        "H2": "期待年率(base)", "H3": "期待年率(opt)", "H4": "期待年率(pess)", "H8": "リバランス余剰現金(概算)",
         "L2": "過去1年PFリターン", "L3": "過去1年TOPIXリターン", "L4": "α(PF-TOPIX)",
         "L5": "価格データ時刻", "L6": "実行ステータス", "L7": "エラー件数",
+        "O2": "好調銘柄数", "O3": "不調銘柄数", "O4": "好調ウェイト合計",
+        "O5": "不調ウェイト合計", "O6": "24か月以上不調数", "O7": "株数増加銘柄数",
     }
     for k, v in labels.items():
         set_cell(dash, k, v)
@@ -938,6 +976,23 @@ def main():
     total_pnl = sum(int(r.get("pnl_jpy", 0)) for r in valid_price_rows) if valid_price_rows else 0
     total_pnl_pct = (total_market_value / total_cost - 1) if total_cost > 0 else 0
     symbol_count = len(unique_tickers)
+
+    good_rows = [r for r in valid_price_rows if "：好調" in str(r.get("q3_judgement", ""))]
+    poor_rows = [r for r in valid_price_rows if "：不調" in str(r.get("q3_judgement", ""))]
+    good_count = len(good_rows)
+    poor_count = len(poor_rows)
+    good_weight_sum = sum(float(r.get("weight", 0.0)) for r in good_rows if isinstance(r.get("weight"), float))
+    poor_weight_sum = sum(float(r.get("weight", 0.0)) for r in poor_rows if isinstance(r.get("weight"), float))
+    poor_24m_count = sum(
+        1 for r in poor_rows
+        if isinstance(r.get("observed_months"), int) and r.get("observed_months") >= 24
+    )
+    increased_qty_count = sum(
+        1 for r in valid_price_rows
+        if parse_float(r.get("first_seen_qty")) is not None
+        and parse_float(r.get("shares")) is not None
+        and float(parse_float(r.get("shares"))) > float(parse_float(r.get("first_seen_qty")))
+    )
 
     set_cell(dash, "B1", now_jst.strftime("%Y-%m-%d %H:%M:%S"))
     set_cell(dash, "B2", int(total_market_value))
@@ -960,9 +1015,6 @@ def main():
     set_cell(dash, "I2", float(pf_ret_base))
     set_cell(dash, "I3", float(pf_ret_opt))
     set_cell(dash, "I4", float(pf_ret_pess))
-    set_cell(dash, "I5", int(value_10y_base))
-    set_cell(dash, "I6", int(value_10y_opt))
-    set_cell(dash, "I7", int(value_10y_pess))
     set_cell(dash, "I8", int(unallocated_cash))
 
     set_cell(dash, "M2", pf_cum)
@@ -971,6 +1023,13 @@ def main():
     set_cell(dash, "M5", latest_bar)
     set_cell(dash, "M6", exec_status)
     set_cell(dash, "M7", int(error_count))
+
+    set_cell(dash, "P2", int(good_count))
+    set_cell(dash, "P3", int(poor_count))
+    set_cell(dash, "P4", float(good_weight_sum))
+    set_cell(dash, "P5", float(poor_weight_sum))
+    set_cell(dash, "P6", int(poor_24m_count))
+    set_cell(dash, "P7", int(increased_qty_count))
 
     # -------------------------
     # 10.5) Build history row (AA:AW)
