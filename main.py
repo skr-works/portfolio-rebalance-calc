@@ -2,6 +2,7 @@ import os
 import json
 import re
 import math
+from collections import Counter
 from datetime import datetime, timezone, timedelta
 
 import pandas as pd
@@ -71,6 +72,35 @@ HIST_HEADERS = [
     "alpha_1y",               # AW
 ]
 HIST_COLS = len(HIST_HEADERS)
+
+
+# observation DB ranges (AX:BK)
+OBS_DB_START_COL = "AX"
+OBS_DB_END_COL = "BK"
+OBS_DB_HEADER_RANGE = f"{OBS_DB_START_COL}13:{OBS_DB_END_COL}13"
+OBS_DB_DATA_RANGE = f"{OBS_DB_START_COL}14:{OBS_DB_END_COL}{MAX_ROW}"
+OBS_DB_CLEAR_RANGE = f"{OBS_DB_START_COL}13:{OBS_DB_END_COL}{MAX_ROW}"
+
+OBS_DB_HEADERS = [
+    "position_key",        # AX ticker + custody_type
+    "ticker",              # AY
+    "custody_type",        # AZ TOKUTEI / NISA
+    "code",                # BA
+    "name",                # BB
+    "first_seen_date",     # BC
+    "first_seen_qty",      # BD
+    "first_seen_cost",     # BE
+    "last_seen_date",      # BF
+    "last_seen_qty",       # BG
+    "last_seen_cost",      # BH
+    "active",              # BI
+    "inactive_since",      # BJ
+    "last_updated_at_jst", # BK
+]
+OBS_DB_COLS = len(OBS_DB_HEADERS)
+
+CUSTODY_TOKUTEI = "TOKUTEI"
+CUSTODY_NISA = "NISA"
 
 # =========================
 # Utility
@@ -428,6 +458,238 @@ def build_history_payload(ws, snapshot_date: str, history_row: list):
     return payload
 
 
+
+def normalize_obs_db_row(row, size=OBS_DB_COLS):
+    row = list(row[:size])
+    if len(row) < size:
+        row += [""] * (size - len(row))
+    return row
+
+
+def normalize_bool(value):
+    s = "" if value is None else str(value).strip().upper()
+    return s in ("TRUE", "1", "YES", "Y")
+
+
+def quote_sheet_name_for_a1(sheet_name: str):
+    return "'" + str(sheet_name).replace("'", "''") + "'"
+
+
+def read_observation_db(ws):
+    """
+    AX:BK の観測DBを position_key をキーに読み込む。
+    既存DBに重複キーがある場合は、上書き事故防止のため停止する。
+    """
+    values = ws.get(OBS_DB_DATA_RANGE)
+    obs_db = {}
+
+    for r in values:
+        rr = normalize_obs_db_row(r)
+        position_key = str(rr[0]).strip()
+        if position_key == "":
+            continue
+
+        if position_key in obs_db:
+            raise ValueError(f"FATAL:DUPLICATE_OBS_DB_KEY:{position_key}")
+
+        obs_db[position_key] = {
+            "position_key": position_key,
+            "ticker": str(rr[1]).strip(),
+            "custody_type": str(rr[2]).strip(),
+            "code": str(rr[3]).strip(),
+            "name": str(rr[4]).strip(),
+            "first_seen_date": normalize_yyyymmdd(rr[5]),
+            "first_seen_qty": str(rr[6]).strip(),
+            "first_seen_cost": str(rr[7]).strip(),
+            "last_seen_date": normalize_yyyymmdd(rr[8]),
+            "last_seen_qty": str(rr[9]).strip(),
+            "last_seen_cost": str(rr[10]).strip(),
+            "active": normalize_bool(rr[11]),
+            "inactive_since": normalize_yyyymmdd(rr[12]),
+            "last_updated_at_jst": str(rr[13]).strip(),
+        }
+
+    return obs_db
+
+
+def fetch_sheet_metadata_safe(sh, params):
+    """
+    gspread のバージョン差異に備え、params の渡し方を両対応にする。
+    """
+    try:
+        return sh.fetch_sheet_metadata(params=params)
+    except TypeError:
+        return sh.fetch_sheet_metadata(params)
+
+
+def detect_custody_boundary_row_or_raise(sh, sheet_name, raw_data, start_row=START_ROW, max_row=MAX_ROW):
+    """
+    B列の太字セルから、特定預かりの最終行を検出する。
+    ただし、A列が有効な銘柄コードである行だけを対象にする。
+
+    仕様：
+      - 太字の有効銘柄行が1件ちょうどの場合のみ正常
+      - 0件 / 2件以上 / 書式取得失敗は FATAL で停止
+    """
+    total_rows = max_row - start_row + 1
+    valid_code_rows = set()
+
+    for i in range(total_rows):
+        row_data = raw_data[i] if i < len(raw_data) else []
+        code = str(row_data[0]).strip() if len(row_data) > 0 else ""
+        if parse_ticker(code) is not None:
+            valid_code_rows.add(start_row + i)
+
+    if not valid_code_rows:
+        raise ValueError("FATAL:NO_VALID_HOLDING_ROWS")
+
+    quoted_sheet_name = quote_sheet_name_for_a1(sheet_name)
+    params = {
+        "includeGridData": True,
+        "ranges": [f"{quoted_sheet_name}!B{start_row}:B{max_row}"],
+        "fields": "sheets(properties(title),data(rowData(values(userEnteredFormat(textFormat(bold)),effectiveFormat(textFormat(bold))))))",
+    }
+
+    try:
+        metadata = fetch_sheet_metadata_safe(sh, params)
+    except Exception as e:
+        raise ValueError(f"FATAL:CUSTODY_BOUNDARY_FORMAT_READ_FAILED:{e}")
+
+    target_sheet = None
+    for sheet in metadata.get("sheets", []):
+        props = sheet.get("properties", {})
+        if props.get("title") == sheet_name:
+            target_sheet = sheet
+            break
+
+    if target_sheet is None:
+        raise ValueError("FATAL:CUSTODY_BOUNDARY_FORMAT_READ_FAILED:SHEET_NOT_FOUND")
+
+    data = target_sheet.get("data", [])
+    row_data_list = data[0].get("rowData", []) if data else []
+    bold_valid_rows = []
+
+    for i, fmt_row in enumerate(row_data_list):
+        sheet_row = start_row + i
+        if sheet_row not in valid_code_rows:
+            continue
+
+        values = fmt_row.get("values", [])
+        if not values:
+            continue
+
+        cell = values[0]
+        user_bold = (
+            cell.get("userEnteredFormat", {})
+                .get("textFormat", {})
+                .get("bold", False)
+        )
+        effective_bold = (
+            cell.get("effectiveFormat", {})
+                .get("textFormat", {})
+                .get("bold", False)
+        )
+
+        if bool(user_bold or effective_bold):
+            bold_valid_rows.append(sheet_row)
+
+    if len(bold_valid_rows) == 0:
+        raise ValueError("FATAL:CUSTODY_BOUNDARY_BOLD_ROW_NOT_FOUND")
+
+    if len(bold_valid_rows) > 1:
+        rows_str = ",".join(str(x) for x in bold_valid_rows)
+        raise ValueError(f"FATAL:MULTIPLE_CUSTODY_BOUNDARY_BOLD_ROWS:{rows_str}")
+
+    return bold_valid_rows[0]
+
+
+def infer_custody_type(sheet_row, custody_boundary_row):
+    if sheet_row <= custody_boundary_row:
+        return CUSTODY_TOKUTEI
+    return CUSTODY_NISA
+
+
+def build_position_key(ticker, custody_type):
+    return f"{ticker}|{custody_type}"
+
+
+def build_observation_db_matrix(obs_db, rows, now_jst):
+    """
+    既存DBと現在の有効保有行から、AX:BKへ書き戻すDB行を作る。
+    価格取得失敗は売却ではないため、holding_input_ok の行は active=True として扱う。
+    """
+    today = now_jst.strftime("%Y%m%d")
+    updated_at = now_jst.strftime("%Y-%m-%d %H:%M:%S")
+
+    current_rows = [r for r in rows if r.get("holding_input_ok")]
+    current_keys = {r.get("position_key") for r in current_rows if r.get("position_key")}
+
+    new_db = {pk: dict(obs) for pk, obs in obs_db.items()}
+
+    # 今回A:Dに存在しない既存DB行は inactive にする。
+    for pk, obs in list(new_db.items()):
+        if pk not in current_keys:
+            if obs.get("active"):
+                obs["active"] = False
+                obs["inactive_since"] = today
+                obs["last_updated_at_jst"] = updated_at
+            new_db[pk] = obs
+
+    # 今回A:Dに存在する有効保有行を active として更新する。
+    for row in current_rows:
+        pk = row.get("position_key", "")
+        if pk == "":
+            continue
+
+        new_db[pk] = {
+            "position_key": pk,
+            "ticker": row.get("ticker", ""),
+            "custody_type": row.get("custody_type", ""),
+            "code": row.get("code", ""),
+            "name": row.get("name", ""),
+            "first_seen_date": row.get("first_seen_date", ""),
+            "first_seen_qty": row.get("first_seen_qty", ""),
+            "first_seen_cost": row.get("first_seen_cost", ""),
+            "last_seen_date": today,
+            "last_seen_qty": format_qty(row.get("shares", "")),
+            "last_seen_cost": format_qty(row.get("cost", "")),
+            "active": True,
+            "inactive_since": "",
+            "last_updated_at_jst": updated_at,
+        }
+
+    custody_rank = {CUSTODY_TOKUTEI: 0, CUSTODY_NISA: 1}
+    sorted_obs = sorted(
+        new_db.values(),
+        key=lambda x: (
+            str(x.get("ticker", "")),
+            custody_rank.get(str(x.get("custody_type", "")), 99),
+            str(x.get("position_key", "")),
+        )
+    )
+
+    out = []
+    for obs in sorted_obs:
+        out.append([
+            obs.get("position_key", ""),
+            obs.get("ticker", ""),
+            obs.get("custody_type", ""),
+            obs.get("code", ""),
+            obs.get("name", ""),
+            obs.get("first_seen_date", ""),
+            obs.get("first_seen_qty", ""),
+            obs.get("first_seen_cost", ""),
+            obs.get("last_seen_date", ""),
+            obs.get("last_seen_qty", ""),
+            obs.get("last_seen_cost", ""),
+            "TRUE" if obs.get("active") else "FALSE",
+            obs.get("inactive_since", ""),
+            obs.get("last_updated_at_jst", ""),
+        ])
+
+    return out
+
+
 # =========================
 # Main
 # =========================
@@ -458,6 +720,19 @@ def main():
 
     raw_data = ws.get(f"A{START_ROW}:T{MAX_ROW}")  # list[list[str]]
 
+    # 太字境界は必須。ここで失敗した場合は、以降の書き込み処理に進ませない。
+    custody_boundary_row = detect_custody_boundary_row_or_raise(
+        sh=sh,
+        sheet_name=sheet_name,
+        raw_data=raw_data,
+        start_row=START_ROW,
+        max_row=MAX_ROW,
+    )
+
+    # 観測DB（AX:BK）を読み込む。空の場合だけ、初回移行としてQ:Rを参照する。
+    obs_db = read_observation_db(ws)
+    obs_db_is_empty = len(obs_db) == 0
+
     # rows: 14..2000 を全て保持（出力行数固定のため）
     total_rows = MAX_ROW - START_ROW + 1
     rows = []
@@ -466,6 +741,7 @@ def main():
 
     # バリデーション
     for i in range(total_rows):
+        sheet_row = START_ROW + i
         row_data = raw_data[i] if i < len(raw_data) else []
         a = row_data[0] if len(row_data) > 0 else ""
         code = str(a).strip()
@@ -479,20 +755,26 @@ def main():
             "status": "OK",            # OK / DATA_NG
             "health_level": "",        # OK/CAUTION/EXIT/DATA_NG
             "health_reason": "",       # reasons str (max 2 by rule)
+            "sheet_row": sheet_row,
             "code": code,
             "name": row_data[1] if len(row_data) > 1 else "",
             "shares": None,
             "cost": None,
             "ticker": None,
+            "custody_type": "",
+            "position_key": "",
+            "holding_input_ok": False,
             "first_seen_date": "",
             "first_seen_qty": "",
+            "first_seen_cost": "",
             "observed_months": None,
             "observed_holding_ym": "",
             "q3_judgement": "",
         }
 
-        existing_first_seen_date = row_data[16] if len(row_data) > 16 else ""
-        existing_first_seen_qty = row_data[17] if len(row_data) > 17 else ""
+        # 初回移行時だけ、現在のQ:Rを移行元として使う。
+        existing_first_seen_date_from_q = row_data[16] if len(row_data) > 16 else ""
+        existing_first_seen_qty_from_r = row_data[17] if len(row_data) > 17 else ""
 
         tk = parse_ticker(code)
         if tk is None:
@@ -502,6 +784,13 @@ def main():
             input_invalid_count += 1
             rows.append(info)
             continue
+
+        custody_type = infer_custody_type(sheet_row, custody_boundary_row)
+        position_key = build_position_key(tk, custody_type)
+
+        info["ticker"] = tk
+        info["custody_type"] = custody_type
+        info["position_key"] = position_key
 
         shares = parse_float(row_data[2] if len(row_data) > 2 else None)
         cost = parse_float(row_data[3] if len(row_data) > 3 else None)
@@ -530,21 +819,48 @@ def main():
             rows.append(info)
             continue
 
-        first_seen_date = normalize_yyyymmdd(existing_first_seen_date)
-        if first_seen_date == "":
-            first_seen_date = now_jst.strftime("%Y%m%d")
+        obs = obs_db.get(position_key)
 
-        first_seen_qty = str(existing_first_seen_qty).strip()
-        if first_seen_qty == "":
+        if obs_db_is_empty:
+            first_seen_date = normalize_yyyymmdd(existing_first_seen_date_from_q)
+            if first_seen_date == "":
+                first_seen_date = now_jst.strftime("%Y%m%d")
+
+            first_seen_qty = str(existing_first_seen_qty_from_r).strip()
+            if first_seen_qty == "":
+                first_seen_qty = format_qty(shares)
+
+            first_seen_cost = format_qty(cost)
+        elif obs is None:
+            first_seen_date = now_jst.strftime("%Y%m%d")
             first_seen_qty = format_qty(shares)
+            first_seen_cost = format_qty(cost)
+        elif obs.get("active") is False:
+            # 全売却後の再購入は、今回の保有サイクルとして初回観測をリセットする。
+            first_seen_date = now_jst.strftime("%Y%m%d")
+            first_seen_qty = format_qty(shares)
+            first_seen_cost = format_qty(cost)
+        else:
+            first_seen_date = normalize_yyyymmdd(obs.get("first_seen_date"))
+            if first_seen_date == "":
+                first_seen_date = now_jst.strftime("%Y%m%d")
+
+            first_seen_qty = str(obs.get("first_seen_qty", "")).strip()
+            if first_seen_qty == "":
+                first_seen_qty = format_qty(shares)
+
+            first_seen_cost = str(obs.get("first_seen_cost", "")).strip()
+            if first_seen_cost == "":
+                first_seen_cost = format_qty(cost)
 
         observed_months = calc_observed_months(first_seen_date, now_jst)
 
-        info["ticker"] = tk
         info["shares"] = float(shares)
         info["cost"] = float(cost)
+        info["holding_input_ok"] = True
         info["first_seen_date"] = first_seen_date
         info["first_seen_qty"] = first_seen_qty
+        info["first_seen_cost"] = first_seen_cost
         info["observed_months"] = observed_months
         info["observed_holding_ym"] = format_observed_ym(observed_months)
         info["q3_judgement"] = "判定不能"
@@ -555,6 +871,14 @@ def main():
     # 有効銘柄（入力がOK）
     unique_tickers = sorted(set(tickers))
     valid_input_count = len(unique_tickers)
+
+    if valid_input_count == 0:
+        raise ValueError("FATAL:NO_VALID_INPUT_ROWS")
+
+    current_position_keys = [r.get("position_key") for r in rows if r.get("holding_input_ok")]
+    duplicate_position_keys = sorted([k for k, v in Counter(current_position_keys).items() if k and v > 1])
+    if duplicate_position_keys:
+        raise ValueError("FATAL:DUPLICATE_POSITION_KEY:" + ",".join(duplicate_position_keys))
 
     # -------------------------
     # 2) yfinance fetch (batch)
@@ -1145,16 +1469,26 @@ def main():
     ]
 
     history_payload = build_history_payload(ws, latest_bar, history_row)
+    obs_db_matrix = build_observation_db_matrix(obs_db, rows, now_jst)
 
     # -------------------------
     # 11) Write to sheet (clear -> write)
     # -------------------------
-    clear_ranges = [DASH_RANGE, OUT_RANGE]
+    clear_ranges = [DASH_RANGE, OUT_RANGE, OBS_DB_CLEAR_RANGE]
     update_payload = [
         {"range": DASH_RANGE, "values": dash},
         {"range": OBS_HEADER_RANGE, "values": [OBS_HEADERS]},
         {"range": OUT_RANGE, "values": output_matrix},
+        {"range": OBS_DB_HEADER_RANGE, "values": [OBS_DB_HEADERS]},
     ]
+
+    if obs_db_matrix:
+        update_payload.append(
+            {
+                "range": f"{OBS_DB_START_COL}14:{OBS_DB_END_COL}{len(obs_db_matrix) + 13}",
+                "values": obs_db_matrix,
+            }
+        )
 
     if history_payload is not None:
         clear_ranges.append(HIST_CLEAR_RANGE)
