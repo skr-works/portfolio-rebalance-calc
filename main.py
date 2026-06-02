@@ -99,6 +99,23 @@ OBS_DB_HEADERS = [
 ]
 OBS_DB_COLS = len(OBS_DB_HEADERS)
 
+# dividend yield cache ranges (BM:BP)
+# 価格系は毎回更新し、配当利回りは7日キャッシュでAPI負荷を抑える。
+DIVIDEND_CACHE_TTL_DAYS = 7
+DIVIDEND_OUTPUT_HEADER_RANGE = "O13"
+DIVIDEND_CACHE_START_COL = "BM"
+DIVIDEND_CACHE_END_COL = "BP"
+DIVIDEND_CACHE_HEADER_RANGE = f"{DIVIDEND_CACHE_START_COL}13:{DIVIDEND_CACHE_END_COL}13"
+DIVIDEND_CACHE_DATA_RANGE = f"{DIVIDEND_CACHE_START_COL}14:{DIVIDEND_CACHE_END_COL}{MAX_ROW}"
+DIVIDEND_CACHE_CLEAR_RANGE = f"{DIVIDEND_CACHE_START_COL}13:{DIVIDEND_CACHE_END_COL}{MAX_ROW}"
+DIVIDEND_CACHE_HEADERS = [
+    "ticker",
+    "dividend_yield",
+    "fetched_at_jst",
+    "fetch_status",
+]
+DIVIDEND_CACHE_COLS = len(DIVIDEND_CACHE_HEADERS)
+
 CUSTODY_TOKUTEI = "TOKUTEI"
 CUSTODY_NISA = "NISA"
 
@@ -512,6 +529,80 @@ def read_observation_db(ws):
     return obs_db
 
 
+def normalize_dividend_cache_row(row, size=DIVIDEND_CACHE_COLS):
+    row = list(row[:size])
+    if len(row) < size:
+        row += [""] * (size - len(row))
+    return row
+
+
+def parse_dividend_cache_datetime(value, jst):
+    s = "" if value is None else str(value).strip()
+    if s == "":
+        return None
+    try:
+        return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=jst)
+    except Exception:
+        return None
+
+
+def is_dividend_cache_fresh(cache_row, now_jst):
+    fetched_at = parse_dividend_cache_datetime(
+        cache_row.get("fetched_at_jst", ""),
+        now_jst.tzinfo,
+    )
+    if fetched_at is None:
+        return False
+    return (now_jst - fetched_at).total_seconds() <= DIVIDEND_CACHE_TTL_DAYS * 24 * 60 * 60
+
+
+def read_dividend_yield_cache(ws):
+    """
+    BM:BP の配当利回りキャッシュを ticker キーで読み込む。
+    重複tickerは後勝ちにして、次回書き戻し時に正規化する。
+    """
+    values = ws.get(DIVIDEND_CACHE_DATA_RANGE)
+    cache = {}
+
+    for r in values:
+        rr = normalize_dividend_cache_row(r)
+        ticker = str(rr[0]).strip()
+        if ticker == "":
+            continue
+
+        cache[ticker] = {
+            "ticker": ticker,
+            "dividend_yield": str(rr[1]).strip(),
+            "fetched_at_jst": str(rr[2]).strip(),
+            "fetch_status": str(rr[3]).strip(),
+        }
+
+    return cache
+
+
+def apply_dividend_cache_value(ticker, cache_row, div_yield_map, div_yield_display_map):
+    dy = parse_float(cache_row.get("dividend_yield", ""))
+    if dy is None:
+        div_yield_map[ticker] = 0.0
+        div_yield_display_map[ticker] = ""
+    else:
+        div_yield_map[ticker] = float(dy)
+        div_yield_display_map[ticker] = float(dy)
+
+
+def build_dividend_cache_matrix(updated_cache, tickers):
+    out = []
+    for tk in sorted(set(tickers)):
+        cache_row = updated_cache.get(tk, {})
+        out.append([
+            tk,
+            cache_row.get("dividend_yield", ""),
+            cache_row.get("fetched_at_jst", ""),
+            cache_row.get("fetch_status", ""),
+        ])
+    return out
+
+
 def fetch_sheet_metadata_safe(sh, params):
     """
     gspread のバージョン差異に備え、params の渡し方を両対応にする。
@@ -732,6 +823,9 @@ def main():
     # 観測DB（AX:BK）を読み込む。空の場合だけ、初回移行としてQ:Rを参照する。
     obs_db = read_observation_db(ws)
     obs_db_is_empty = len(obs_db) == 0
+
+    # 配当利回りキャッシュ（BM:BP）を読み込む。
+    dividend_cache = read_dividend_yield_cache(ws)
 
     # rows: 14..2000 を全て保持（出力行数固定のため）
     total_rows = MAX_ROW - START_ROW + 1
@@ -992,25 +1086,61 @@ def main():
     benchmark_fail_count = 0 if topix_val is not None else 1
 
     # -------------------------
-    # 3) info fetch (dividendYield, sector) - fail-safe
+    # 3) info fetch (dividendYield) - 7日キャッシュ / fail-safe
     # -------------------------
-    # 仕様：dividendYield は info.get("dividendYield") のみ、取れなければ0
-    # sector も取れなければ空（※仕様に従い「取れれば埋める」）
+    # 仕様：O列表示は配当利回り。取得不能時の表示は空欄、期待年率計算では0扱い。
+    # 7日以内のキャッシュがあれば yfinance の info 取得をスキップする。
     div_yield_map = {tk: 0.0 for tk in unique_tickers}
-    sector_map = {tk: "" for tk in unique_tickers}
+    div_yield_display_map = {tk: "" for tk in unique_tickers}
+    updated_dividend_cache = {}
+    fetched_at_now = now_jst.strftime("%Y-%m-%d %H:%M:%S")
 
     for tk in unique_tickers:
+        cache_row = dividend_cache.get(tk)
+
+        if cache_row is not None and is_dividend_cache_fresh(cache_row, now_jst):
+            apply_dividend_cache_value(tk, cache_row, div_yield_map, div_yield_display_map)
+            updated_dividend_cache[tk] = cache_row
+            continue
+
         try:
             info = yf.Ticker(tk).info  # ここが落ちても価格は巻き添えにしない
             dy = info.get("dividendYield", None)
+
             if isinstance(dy, (int, float)) and not (isinstance(dy, float) and math.isnan(dy)):
-                div_yield_map[tk] = float(dy)
-            sec = info.get("sector", "")
-            if isinstance(sec, str):
-                sector_map[tk] = sec
+                dy_value = float(dy)
+                div_yield_map[tk] = dy_value
+                div_yield_display_map[tk] = dy_value
+                updated_dividend_cache[tk] = {
+                    "ticker": tk,
+                    "dividend_yield": dy_value,
+                    "fetched_at_jst": fetched_at_now,
+                    "fetch_status": "OK",
+                }
+            else:
+                # infoは取得できたが dividendYield がない場合。表示は空欄、計算は0扱い。
+                div_yield_map[tk] = 0.0
+                div_yield_display_map[tk] = ""
+                updated_dividend_cache[tk] = {
+                    "ticker": tk,
+                    "dividend_yield": "",
+                    "fetched_at_jst": fetched_at_now,
+                    "fetch_status": "NO_DIVIDEND_YIELD",
+                }
         except Exception:
-            # 取れない場合は仕様通り 0 / "" のまま
-            pass
+            # info取得自体が失敗した場合は、前回値があれば維持し、取得日は更新しない。
+            if cache_row is not None:
+                apply_dividend_cache_value(tk, cache_row, div_yield_map, div_yield_display_map)
+                updated_dividend_cache[tk] = cache_row
+            else:
+                div_yield_map[tk] = 0.0
+                div_yield_display_map[tk] = ""
+                updated_dividend_cache[tk] = {
+                    "ticker": tk,
+                    "dividend_yield": "",
+                    "fetched_at_jst": "",
+                    "fetch_status": "FETCH_FAILED",
+                }
 
     # -------------------------
     # 4) per-row compute
@@ -1119,9 +1249,7 @@ def main():
             ret_base = 0.0
 
         row["ret_base"] = float(ret_base)
-
-        # sector
-        row["sector"] = sector_map.get(tk, "")
+        row["dividend_yield"] = div_yield_display_map.get(tk, "")
 
         valid_price_rows.append(row)
 
@@ -1339,7 +1467,7 @@ def main():
         act = row.get("action", "HOLD")
         trade = row.get("trade_jpy", 0)
         
-        sec = row.get("sector", "")
+        dy_out = row.get("dividend_yield", "")
         rb = row.get("ret_base", "")
 
         output_matrix.append([
@@ -1353,7 +1481,7 @@ def main():
             hr,         # L: 判定理由 (移動)
             act,        # M: 売買アクション (移動)
             trade,      # N: 売買金額 (移動)
-            sec,                                # O: セクター (後ろへ)
+            dy_out,                             # O: 配当利回り
             rb,                                 # P: 期待年率 (後ろへ)
             row.get("first_seen_date", ""),     # Q: 初回観測日
             row.get("first_seen_qty", ""),      # R: 初回観測数量
@@ -1470,16 +1598,19 @@ def main():
 
     history_payload = build_history_payload(ws, latest_bar, history_row)
     obs_db_matrix = build_observation_db_matrix(obs_db, rows, now_jst)
+    dividend_cache_matrix = build_dividend_cache_matrix(updated_dividend_cache, unique_tickers)
 
     # -------------------------
     # 11) Write to sheet (clear -> write)
     # -------------------------
-    clear_ranges = [DASH_RANGE, OUT_RANGE, OBS_DB_CLEAR_RANGE]
+    clear_ranges = [DASH_RANGE, OUT_RANGE, OBS_DB_CLEAR_RANGE, DIVIDEND_CACHE_CLEAR_RANGE]
     update_payload = [
         {"range": DASH_RANGE, "values": dash},
+        {"range": DIVIDEND_OUTPUT_HEADER_RANGE, "values": [["配当利回り"]]},
         {"range": OBS_HEADER_RANGE, "values": [OBS_HEADERS]},
         {"range": OUT_RANGE, "values": output_matrix},
         {"range": OBS_DB_HEADER_RANGE, "values": [OBS_DB_HEADERS]},
+        {"range": DIVIDEND_CACHE_HEADER_RANGE, "values": [DIVIDEND_CACHE_HEADERS]},
     ]
 
     if obs_db_matrix:
@@ -1487,6 +1618,14 @@ def main():
             {
                 "range": f"{OBS_DB_START_COL}14:{OBS_DB_END_COL}{len(obs_db_matrix) + 13}",
                 "values": obs_db_matrix,
+            }
+        )
+
+    if dividend_cache_matrix:
+        update_payload.append(
+            {
+                "range": f"{DIVIDEND_CACHE_START_COL}14:{DIVIDEND_CACHE_END_COL}{len(dividend_cache_matrix) + 13}",
+                "values": dividend_cache_matrix,
             }
         )
 
