@@ -162,6 +162,23 @@ def parse_float(s):
         return None
 
 
+def normalize_dividend_yield(value):
+    """
+    配当利回りを計算用の小数に正規化する。
+    - 0.027 のような小数はそのまま
+    - 2.7 のような%表記相当は 0.027 に変換
+    """
+    dy = parse_float(value)
+    if dy is None or (isinstance(dy, float) and math.isnan(dy)):
+        return 0.0
+    dy = float(dy)
+    if dy < 0:
+        return 0.0
+    if dy >= 1.0:
+        return dy / 100.0
+    return dy
+
+
 def calc_cagr(close_series: pd.Series):
     """
     仕様固定：
@@ -582,13 +599,10 @@ def read_dividend_yield_cache(ws):
 
 
 def apply_dividend_cache_value(ticker, cache_row, div_yield_map, div_yield_display_map):
-    dy = parse_float(cache_row.get("dividend_yield", ""))
-    if dy is None:
-        div_yield_map[ticker] = 0.0
-        div_yield_display_map[ticker] = 0.0
-    else:
-        div_yield_map[ticker] = float(dy)
-        div_yield_display_map[ticker] = float(dy)
+    dy = normalize_dividend_yield(cache_row.get("dividend_yield", ""))
+    div_yield_map[ticker] = dy
+    div_yield_display_map[ticker] = dy
+    cache_row["dividend_yield"] = dy
 
 
 def build_dividend_cache_matrix(updated_cache, tickers):
@@ -1109,7 +1123,7 @@ def main():
             dy = info.get("dividendYield", None)
 
             if isinstance(dy, (int, float)) and not (isinstance(dy, float) and math.isnan(dy)):
-                dy_value = float(dy)
+                dy_value = normalize_dividend_yield(dy)
                 div_yield_map[tk] = dy_value
                 div_yield_display_map[tk] = dy_value
                 updated_dividend_cache[tk] = {
@@ -1514,7 +1528,7 @@ def main():
     total_pnl = sum(int(r.get("pnl_jpy", 0)) for r in valid_price_rows) if valid_price_rows else 0
     total_pnl_pct = (total_market_value / total_cost - 1) if total_cost > 0 else 0
     total_annual_dividend_jpy = sum(
-        float(r.get("cost_value", 0) or 0) * float(parse_float(r.get("dividend_yield")) or 0.0)
+        float(r.get("cost_value", 0) or 0) * normalize_dividend_yield(r.get("dividend_yield"))
         for r in valid_price_rows
     ) if valid_price_rows else 0.0
     pf_dividend_yield = (total_annual_dividend_jpy / total_cost) if total_cost > 0 else 0
