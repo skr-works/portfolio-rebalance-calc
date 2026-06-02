@@ -1496,7 +1496,7 @@ def main():
     # labels（固定）
     benchmark_label_suffix = f"({selected_benchmark_ticker})" if selected_benchmark_ticker else ""
     labels = {
-        "A1": "更新日時(JST)", "A2": "総評価額(JPY)", "A3": "総取得額(JPY)", "A4": "総損益(JPY)", "A5": "総損益(%)", "A6": "銘柄数", "A7": "年間配当金概算", "A8": "PF配当利回り",
+        "A1": "更新日時(JST)", "A2": "総評価額(JPY)", "A3": "総取得額(JPY)", "A4": "総損益(JPY)", "A5": "総損益(%)", "A6": "銘柄数",
         "D2": "上位1銘柄ウェイト(%)", "D3": "上位3銘柄ウェイト合計(%)", "D4": "HHI(銘柄集中度)", "D5": "EXIT銘柄数", "D6": "CAUTION銘柄数", "D7": "OK銘柄数",
         "D8": "要注意Top1", "D9": "要注意Top2", "D10": "要注意Top3",
         "H2": "期待年率(base)", "H3": "期待年率(opt)", "H4": "期待年率(pess)", "H5": "リバランス余剰現金(概算)",
@@ -1531,25 +1531,12 @@ def main():
         and float(parse_float(r.get("shares"))) > float(parse_float(r.get("first_seen_qty")))
     )
 
-    # A7/B7, A8/B8: 配当利回りを使った概算。
-    # O列の表示値は変更せず、計算時だけ「2.7」形式なら 0.027 に正規化する。
-    total_annual_dividend_jpy = 0.0
-    for r in valid_price_rows:
-        dy_raw = parse_float(r.get("dividend_yield"))
-        if dy_raw is None:
-            continue
-        dy_rate = float(dy_raw) / 100.0 if float(dy_raw) > 1.0 else float(dy_raw)
-        total_annual_dividend_jpy += float(r.get("cost_value", 0) or 0) * dy_rate
-    pf_dividend_yield = (total_annual_dividend_jpy / total_cost) if total_cost > 0 else 0.0
-
     set_cell(dash, "B1", now_jst.strftime("%Y-%m-%d %H:%M:%S"))
     set_cell(dash, "B2", int(total_market_value))
     set_cell(dash, "B3", int(total_cost))
     set_cell(dash, "B4", int(total_pnl))
     set_cell(dash, "B5", float(total_pnl_pct))
     set_cell(dash, "B6", int(symbol_count))
-    set_cell(dash, "B7", int(round(total_annual_dividend_jpy)))
-    set_cell(dash, "B8", float(pf_dividend_yield))
 
     set_cell(dash, "E2", float(top1))
     set_cell(dash, "E3", float(top3))
