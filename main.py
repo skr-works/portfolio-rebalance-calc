@@ -585,7 +585,7 @@ def apply_dividend_cache_value(ticker, cache_row, div_yield_map, div_yield_displ
     dy = parse_float(cache_row.get("dividend_yield", ""))
     if dy is None:
         div_yield_map[ticker] = 0.0
-        div_yield_display_map[ticker] = ""
+        div_yield_display_map[ticker] = 0.0
     else:
         div_yield_map[ticker] = float(dy)
         div_yield_display_map[ticker] = float(dy)
@@ -1089,10 +1089,10 @@ def main():
     # -------------------------
     # 3) info fetch (dividendYield) - 7日キャッシュ / fail-safe
     # -------------------------
-    # 仕様：O列表示は配当利回り。取得不能時の表示は空欄、期待年率計算では0扱い。
+    # 仕様：O列表示は配当利回り。取得不能時の表示は0、期待年率計算でも0扱い。
     # 7日以内のキャッシュがあれば yfinance の info 取得をスキップする。
     div_yield_map = {tk: 0.0 for tk in unique_tickers}
-    div_yield_display_map = {tk: "" for tk in unique_tickers}
+    div_yield_display_map = {tk: 0.0 for tk in unique_tickers}
     updated_dividend_cache = {}
     fetched_at_now = now_jst.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -1119,12 +1119,12 @@ def main():
                     "fetch_status": "OK",
                 }
             else:
-                # infoは取得できたが dividendYield がない場合。表示は空欄、計算は0扱い。
+                # infoは取得できたが dividendYield がない場合。表示・計算ともに0扱い。
                 div_yield_map[tk] = 0.0
-                div_yield_display_map[tk] = ""
+                div_yield_display_map[tk] = 0.0
                 updated_dividend_cache[tk] = {
                     "ticker": tk,
-                    "dividend_yield": "",
+                    "dividend_yield": 0.0,
                     "fetched_at_jst": fetched_at_now,
                     "fetch_status": "NO_DIVIDEND_YIELD",
                 }
@@ -1135,10 +1135,10 @@ def main():
                 updated_dividend_cache[tk] = cache_row
             else:
                 div_yield_map[tk] = 0.0
-                div_yield_display_map[tk] = ""
+                div_yield_display_map[tk] = 0.0
                 updated_dividend_cache[tk] = {
                     "ticker": tk,
-                    "dividend_yield": "",
+                    "dividend_yield": 0.0,
                     "fetched_at_jst": "",
                     "fetch_status": "FETCH_FAILED",
                 }
