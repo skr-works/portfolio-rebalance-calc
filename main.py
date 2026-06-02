@@ -99,12 +99,13 @@ OBS_DB_HEADERS = [
 ]
 OBS_DB_COLS = len(OBS_DB_HEADERS)
 
-# dividend yield cache ranges (BM:BP)
+# dividend yield cache ranges (BL:BO)
 # 価格系は毎回更新し、配当利回りは7日キャッシュでAPI負荷を抑える。
+# 既存シートの上限がBK列までのため、未使用のBL:BOに置く。
 DIVIDEND_CACHE_TTL_DAYS = 7
 DIVIDEND_OUTPUT_HEADER_RANGE = "O13"
-DIVIDEND_CACHE_START_COL = "BM"
-DIVIDEND_CACHE_END_COL = "BP"
+DIVIDEND_CACHE_START_COL = "BL"
+DIVIDEND_CACHE_END_COL = "BO"
 DIVIDEND_CACHE_HEADER_RANGE = f"{DIVIDEND_CACHE_START_COL}13:{DIVIDEND_CACHE_END_COL}13"
 DIVIDEND_CACHE_DATA_RANGE = f"{DIVIDEND_CACHE_START_COL}14:{DIVIDEND_CACHE_END_COL}{MAX_ROW}"
 DIVIDEND_CACHE_CLEAR_RANGE = f"{DIVIDEND_CACHE_START_COL}13:{DIVIDEND_CACHE_END_COL}{MAX_ROW}"
@@ -558,7 +559,7 @@ def is_dividend_cache_fresh(cache_row, now_jst):
 
 def read_dividend_yield_cache(ws):
     """
-    BM:BP の配当利回りキャッシュを ticker キーで読み込む。
+    BL:BO の配当利回りキャッシュを ticker キーで読み込む。
     重複tickerは後勝ちにして、次回書き戻し時に正規化する。
     """
     values = ws.get(DIVIDEND_CACHE_DATA_RANGE)
