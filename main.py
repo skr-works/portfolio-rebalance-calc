@@ -424,6 +424,33 @@ def fetch_single_benchmark_return(ticker: str):
         return None
 
 
+def fetch_current_price_fast(ticker: str):
+    """
+    E列の現在値用。
+    fast_info.last_price のみ取得する。
+    失敗・不正値なら None を返し、呼び出し側で既存 close_5d fallback に落とす。
+    """
+    try:
+        fi = yf.Ticker(ticker).fast_info
+
+        try:
+            value = fi.get("last_price")
+        except Exception:
+            value = fi["last_price"]
+
+        if value is None:
+            return None
+
+        value = float(value)
+        if math.isnan(value) or value <= 0:
+            return None
+
+        return value
+
+    except Exception:
+        return None
+
+
 def build_history_payload(ws, snapshot_date: str, history_row: list):
     """
     履歴は AA:AW にだけ持つ。
@@ -978,7 +1005,7 @@ def main():
     # -------------------------
     # 2) yfinance fetch (batch)
     # -------------------------
-    # 仕様：current_price は history(period="5d", interval="1d") 最新Close
+    # 仕様：current_price は fast_info.last_price を優先し、失敗時のみ close_5d 最新Close にfallback
     # 仕様：health/forecast は Close、1年PF/TOPIXリターンは分割調整後価格を優先
 
     # ベンチ候補も含めて一括で落とす
@@ -1064,6 +1091,16 @@ def main():
             latest_bar = "NO_DATA"
     except Exception:
         latest_bar = "NO_DATA"
+
+    # -------------------------
+    # 2.5) current price fetch (fast_info)
+    # -------------------------
+    # E列 current_price は fast_info.last_price を優先する。
+    # 同一tickerを複数保有行で持つ場合でも、API取得はtickerごとに1回だけ行う。
+    current_price_fast_map = {}
+
+    for tk in unique_tickers:
+        current_price_fast_map[tk] = fetch_current_price_fast(tk)
 
     # benchmark availability（1年リターンは auto_adjust=True の調整後Closeを最優先）
     if not close_1y_return.empty:
@@ -1160,15 +1197,17 @@ def main():
 
         tk = row["ticker"]
 
-        # current_price: close_5d latest non-NaN
-        cur = None
-        try:
-            if tk in close_5d.columns:
-                s = close_5d[tk].dropna()
-                if not s.empty:
-                    cur = float(s.iloc[-1])
-        except Exception:
-            cur = None
+        # current_price: fast_info.last_price -> existing close_5d fallback
+        cur = current_price_fast_map.get(tk)
+
+        if cur is None:
+            try:
+                if tk in close_5d.columns:
+                    s = close_5d[tk].dropna()
+                    if not s.empty:
+                        cur = float(s.iloc[-1])
+            except Exception:
+                cur = None
 
         if cur is None or (isinstance(cur, float) and math.isnan(cur)):
             # 価格取得失敗 → 行はDATA_NG（仕様：E〜Pは空、M=DATA_NG、N=理由）
