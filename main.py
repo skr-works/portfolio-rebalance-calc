@@ -31,84 +31,101 @@ RET_CLIP_MAX = 0.30
 DD_EXIT = -0.30
 DD_CAUTION = -0.20
 
+# risk analytics parameters
+TRADING_DAYS_PER_YEAR = 252
+RISK_MIN_OBSERVATIONS = 126
+RISK_MIN_COVERAGE = 0.80
+RISK_FFILL_LIMIT = 3
+
 # output ranges
-DASH_RANGE = "A1:M11"
+DASH_RANGE = "A1:X11"
 OUT_RANGE = f"E{START_ROW}:T{MAX_ROW}"  # E..P 既存出力 + Q..T 初回観測系4列
 
 # observation columns (Q:T)
 OBS_HEADER_RANGE = "Q13:T13"
 OBS_HEADERS = ["初回観測日", "初回観測数量", "観測保有年月数", "3か月判定"]
 
-# history ranges (AA:AW)
-HIST_START_COL = "AA"
-HIST_END_COL = "AW"
+# history ranges (AU:CG)
+HIST_START_COL = "AU"
+HIST_END_COL = "CG"
 HIST_HEADER_RANGE = f"{HIST_START_COL}1:{HIST_END_COL}1"
 HIST_DATA_RANGE = f"{HIST_START_COL}2:{HIST_END_COL}"
-HIST_CLEAR_RANGE = f"{HIST_START_COL}2:{HIST_END_COL}"
 
 HIST_HEADERS = [
-    "snapshot_date",          # AA latest_bar_date を使う
-    "updated_at_jst",         # AB
-    "total_market_value_jpy", # AC
-    "total_cost_jpy",         # AD
-    "total_pnl_jpy",          # AE
-    "total_pnl_pct",          # AF
-    "symbol_count",           # AG
-    "top1_weight",            # AH
-    "top3_weight",            # AI
-    "hhi",                    # AJ
-    "exit_count",             # AK
-    "caution_count",          # AL
-    "ok_count",               # AM
-    "pf_ret_base",            # AN
-    "pf_ret_opt",             # AO
-    "pf_ret_pess",            # AP
-    "value_10y_base_jpy",     # AQ
-    "value_10y_opt_jpy",      # AR
-    "value_10y_pess_jpy",     # AS
-    "unallocated_cash_jpy",   # AT
-    "pf_cum_1y",              # AU
-    "topix_cum_1y",           # AV
-    "alpha_1y",               # AW
+    "snapshot_date",                              # AU 実行日
+    "updated_at_jst",                             # AV
+    "total_market_value_jpy",                     # AW
+    "total_cost_jpy",                             # AX
+    "total_pnl_jpy",                              # AY
+    "total_pnl_pct",                              # AZ
+    "symbol_count",                               # BA
+    "top1_weight",                                # BB
+    "top3_weight",                                # BC
+    "hhi",                                        # BD
+    "exit_count",                                 # BE
+    "caution_count",                              # BF
+    "ok_count",                                   # BG
+    "pf_ret_base",                                # BH
+    "pf_ret_opt",                                 # BI
+    "pf_ret_pess",                                # BJ
+    "value_10y_base_jpy",                         # BK
+    "value_10y_opt_jpy",                          # BL
+    "value_10y_pess_jpy",                         # BM
+    "unallocated_cash_jpy",                       # BN
+    "pf_cum_1y",                                  # BO
+    "topix_cum_1y",                               # BP
+    "alpha_1y",                                   # BQ
+    "portfolio_vol_annual",                       # BR
+    "top1_risk_contributor_ticker",               # BS
+    "top1_risk_contribution_pct",                 # BT
+    "top3_risk_contribution_pct",                 # BU
+    "risk_hhi",                                   # BV
+    "effective_risk_symbol_count",                # BW
+    "beta_to_topix",                              # BX
+    "tracking_error_1y",                          # BY
+    "information_ratio_1y",                       # BZ
+    "downside_capture_1y",                        # CA
+    "max_drawdown_1y",                            # CB
+    "stress_topix_minus10_loss_pct",              # CC
+    "stress_topix_minus20_loss_pct",              # CD
+    "stress_top1_risk_minus20_loss_pct",          # CE
+    "stress_top3_risk_minus20_loss_pct",          # CF
+    "stress_topix_minus10_top3_minus15_loss_pct", # CG
 ]
 HIST_COLS = len(HIST_HEADERS)
 
-
-# observation DB ranges (AX:BK)
-OBS_DB_START_COL = "AX"
-OBS_DB_END_COL = "BK"
+# observation DB ranges (CH:CU)
+OBS_DB_START_COL = "CH"
+OBS_DB_END_COL = "CU"
 OBS_DB_HEADER_RANGE = f"{OBS_DB_START_COL}13:{OBS_DB_END_COL}13"
 OBS_DB_DATA_RANGE = f"{OBS_DB_START_COL}14:{OBS_DB_END_COL}{MAX_ROW}"
-OBS_DB_CLEAR_RANGE = f"{OBS_DB_START_COL}13:{OBS_DB_END_COL}{MAX_ROW}"
 
 OBS_DB_HEADERS = [
-    "position_key",        # AX ticker + custody_type
-    "ticker",              # AY
-    "custody_type",        # AZ TOKUTEI / NISA
-    "code",                # BA
-    "name",                # BB
-    "first_seen_date",     # BC
-    "first_seen_qty",      # BD
-    "first_seen_cost",     # BE
-    "last_seen_date",      # BF
-    "last_seen_qty",       # BG
-    "last_seen_cost",      # BH
-    "active",              # BI
-    "inactive_since",      # BJ
-    "last_updated_at_jst", # BK
+    "position_key",        # CH ticker + custody_type
+    "ticker",              # CI
+    "custody_type",        # CJ TOKUTEI / NISA
+    "code",                # CK
+    "name",                # CL
+    "first_seen_date",     # CM
+    "first_seen_qty",      # CN
+    "first_seen_cost",     # CO
+    "last_seen_date",      # CP
+    "last_seen_qty",       # CQ
+    "last_seen_cost",      # CR
+    "active",              # CS
+    "inactive_since",      # CT
+    "last_updated_at_jst", # CU
 ]
 OBS_DB_COLS = len(OBS_DB_HEADERS)
 
-# dividend yield cache ranges (BL:BO)
+# dividend yield cache ranges (CV:CY)
 # 価格系は毎回更新し、配当利回りは7日キャッシュでAPI負荷を抑える。
-# 既存シートの上限がBK列までのため、未使用のBL:BOに置く。
 DIVIDEND_CACHE_TTL_DAYS = 7
 DIVIDEND_OUTPUT_HEADER_RANGE = "O13"
-DIVIDEND_CACHE_START_COL = "BL"
-DIVIDEND_CACHE_END_COL = "BO"
+DIVIDEND_CACHE_START_COL = "CV"
+DIVIDEND_CACHE_END_COL = "CY"
 DIVIDEND_CACHE_HEADER_RANGE = f"{DIVIDEND_CACHE_START_COL}13:{DIVIDEND_CACHE_END_COL}13"
 DIVIDEND_CACHE_DATA_RANGE = f"{DIVIDEND_CACHE_START_COL}14:{DIVIDEND_CACHE_END_COL}{MAX_ROW}"
-DIVIDEND_CACHE_CLEAR_RANGE = f"{DIVIDEND_CACHE_START_COL}13:{DIVIDEND_CACHE_END_COL}{MAX_ROW}"
 DIVIDEND_CACHE_HEADERS = [
     "ticker",
     "dividend_yield",
@@ -239,27 +256,52 @@ def extract_price_df(dl: pd.DataFrame, tickers: list, field: str, fallback_field
 
 
 def build_dashboard_matrix():
-    # 11 rows x 13 cols (A..M)
-    return [["" for _ in range(13)] for __ in range(11)]
+    # 11 rows x 24 cols (A..X)
+    return [["" for _ in range(24)] for __ in range(11)]
 
 
 def set_cell(mat, a1: str, value):
     """
-    A1形式（A1〜M11）だけを対象にセットする。
+    A1形式（A1〜X11）だけを対象にセットする。
     """
-    col_letters = re.match(r"^([A-M]+)", a1).group(1)
-    row_num = int(re.match(r"^[A-M]+(\d+)$", a1).group(1))
+    match = re.match(r"^([A-X])(\d+)$", str(a1).strip().upper())
+    if not match:
+        raise ValueError(f"Invalid dashboard cell: {a1}")
 
-    # A=0 ... M=12
-    col_map = {chr(ord("A") + i): i for i in range(13)}
-    if col_letters not in col_map:
-        raise ValueError(f"Invalid column: {col_letters}")
-    c = col_map[col_letters]
+    col_letter = match.group(1)
+    row_num = int(match.group(2))
+    c = ord(col_letter) - ord("A")
     r = row_num - 1
-    if not (0 <= r < 11 and 0 <= c < 13):
+
+    if not (0 <= r < 11 and 0 <= c < 24):
         raise ValueError(f"Cell out of dashboard range: {a1}")
 
     mat[r][c] = value
+
+
+def pad_matrix_rows(rows, total_rows, col_count):
+    """
+    固定範囲の全件上書き用に、行数・列数を固定する。
+    既存データを消すためのclearは使わない。
+    """
+    if len(rows) > total_rows:
+        raise ValueError(f"FATAL:MATRIX_CAPACITY_EXCEEDED:{len(rows)}>{total_rows}")
+
+    out = []
+    for row in rows:
+        normalized = list(row[:col_count])
+        if len(normalized) < col_count:
+            normalized += [""] * (col_count - len(normalized))
+        out.append(normalized)
+
+    out.extend([[""] * col_count for _ in range(total_rows - len(out))])
+    return out
+
+
+def display_name(name, ticker):
+    name_value = "" if name is None else str(name).strip()
+    ticker_value = "" if ticker is None else str(ticker).strip()
+    return name_value if name_value else ticker_value
 
 
 def clip(x, lo, hi):
@@ -451,10 +493,272 @@ def fetch_current_price_fast(ticker: str):
         return None
 
 
+
+def empty_portfolio_analytics(status="DATA_NG:NOT_CALCULATED"):
+    return {
+        "status": status,
+        "coverage": 0.0,
+        "calc_symbol_count": 0,
+        "portfolio_vol_annual": "",
+        "top1_risk_contributor_ticker": "",
+        "top1_risk_contributor_name": "",
+        "top1_risk_contribution_pct": "",
+        "top3_risk_contribution_pct": "",
+        "risk_hhi": "",
+        "effective_risk_symbol_count": "",
+        "money_top1_difference": "",
+        "correlation_concentration_memo": "",
+        "beta_to_topix": "",
+        "tracking_error_1y": "",
+        "information_ratio_1y": "",
+        "downside_capture_1y": "",
+        "max_drawdown_1y": "",
+        "stress_topix_minus10_loss_pct": "",
+        "stress_topix_minus20_loss_pct": "",
+        "stress_top1_risk_minus20_loss_pct": "",
+        "stress_top3_risk_minus20_loss_pct": "",
+        "stress_topix_minus10_top3_minus15_loss_pct": "",
+        "top_entries": [],
+    }
+
+
+def calculate_portfolio_analytics(valid_price_rows, adjusted_close_df, selected_benchmark_ticker):
+    """
+    既存のauto_adjust=True・1年日足だけを使い、追加APIなしで計算する。
+    特定/NISAの重複保有はticker単位で集約する。
+    新規分析が失敗しても既存処理は止めず、空欄とstatusを返す。
+    """
+    result = empty_portfolio_analytics()
+
+    if adjusted_close_df is None or adjusted_close_df.empty:
+        result["status"] = "DATA_NG:NO_ADJUSTED_PRICE"
+        return result
+    if not selected_benchmark_ticker or selected_benchmark_ticker not in adjusted_close_df.columns:
+        result["status"] = "DATA_NG:BENCHMARK_MISSING"
+        return result
+
+    positions = {}
+    for row in valid_price_rows:
+        ticker = str(row.get("ticker", "")).strip()
+        if ticker == "":
+            continue
+        market_value = parse_float(row.get("market_value"))
+        if market_value is None or market_value <= 0:
+            continue
+
+        entry = positions.setdefault(
+            ticker,
+            {
+                "ticker": ticker,
+                "name": "",
+                "market_value": 0.0,
+            },
+        )
+        entry["market_value"] += float(market_value)
+        if entry["name"] == "":
+            entry["name"] = str(row.get("name", "")).strip()
+
+    total_market_value = sum(x["market_value"] for x in positions.values())
+    if total_market_value <= 0:
+        result["status"] = "DATA_NG:NO_VALID_POSITION"
+        return result
+
+    for entry in positions.values():
+        entry["weight"] = entry["market_value"] / total_market_value
+
+    benchmark_prices = adjusted_close_df[selected_benchmark_ticker].dropna()
+    if len(benchmark_prices) < RISK_MIN_OBSERVATIONS + 1:
+        result["status"] = "DATA_NG:BENCHMARK_DATA_SHORT"
+        return result
+
+    benchmark_index = benchmark_prices.index
+    benchmark_returns = benchmark_prices.pct_change(fill_method=None).replace([np.inf, -np.inf], np.nan)
+
+    ticker_returns = {}
+    for ticker, entry in positions.items():
+        if ticker not in adjusted_close_df.columns:
+            continue
+
+        prices = adjusted_close_df[ticker].reindex(benchmark_index)
+        first_valid = prices.first_valid_index()
+        last_valid = prices.last_valid_index()
+        if first_valid is None or last_valid is None:
+            continue
+
+        filled = prices.copy()
+        filled.loc[first_valid:last_valid] = filled.loc[first_valid:last_valid].ffill(limit=RISK_FFILL_LIMIT)
+        returns = filled.pct_change(fill_method=None).replace([np.inf, -np.inf], np.nan)
+
+        if int(returns.notna().sum()) >= RISK_MIN_OBSERVATIONS:
+            ticker_returns[ticker] = returns
+
+    eligible_tickers = sorted(ticker_returns.keys())
+    coverage = sum(positions[ticker]["weight"] for ticker in eligible_tickers)
+    result["coverage"] = float(coverage)
+    result["calc_symbol_count"] = len(eligible_tickers)
+
+    if coverage < RISK_MIN_COVERAGE:
+        result["status"] = "DATA_NG:COVERAGE_LT_80"
+        return result
+    if len(eligible_tickers) < 2:
+        result["status"] = "DATA_NG:SYMBOL_LT_2"
+        return result
+
+    aligned = pd.DataFrame({selected_benchmark_ticker: benchmark_returns})
+    for ticker in eligible_tickers:
+        aligned[ticker] = ticker_returns[ticker]
+    aligned = aligned.dropna(how="any")
+
+    if len(aligned) < RISK_MIN_OBSERVATIONS:
+        result["status"] = "DATA_NG:COMMON_DATA_SHORT"
+        return result
+
+    raw_weights = np.array([positions[ticker]["weight"] for ticker in eligible_tickers], dtype=float)
+    raw_weight_sum = float(raw_weights.sum())
+    if raw_weight_sum <= 0:
+        result["status"] = "DATA_NG:WEIGHT_ZERO"
+        return result
+    weights = raw_weights / raw_weight_sum
+
+    stock_returns = aligned[eligible_tickers].astype(float)
+    benchmark_daily = aligned[selected_benchmark_ticker].astype(float)
+    covariance = stock_returns.cov().to_numpy(dtype=float)
+
+    if covariance.shape != (len(eligible_tickers), len(eligible_tickers)) or not np.isfinite(covariance).all():
+        result["status"] = "DATA_NG:COVARIANCE_INVALID"
+        return result
+
+    portfolio_variance_daily = float(weights.T @ covariance @ weights)
+    if not math.isfinite(portfolio_variance_daily) or portfolio_variance_daily <= 0:
+        result["status"] = "DATA_NG:PORTFOLIO_VARIANCE"
+        return result
+
+    portfolio_vol_daily = math.sqrt(portfolio_variance_daily)
+    portfolio_vol_annual = portfolio_vol_daily * math.sqrt(TRADING_DAYS_PER_YEAR)
+
+    covariance_weight = covariance @ weights
+    component_risk = weights * covariance_weight / portfolio_vol_daily
+    absolute_component = np.abs(component_risk)
+    absolute_component_sum = float(absolute_component.sum())
+    if absolute_component_sum <= 0 or not math.isfinite(absolute_component_sum):
+        result["status"] = "DATA_NG:RISK_CONTRIBUTION"
+        return result
+    risk_share = absolute_component / absolute_component_sum
+
+    annual_vols = stock_returns.std(ddof=1) * math.sqrt(TRADING_DAYS_PER_YEAR)
+    top_entries = []
+    for idx, ticker in enumerate(eligible_tickers):
+        top_entries.append(
+            {
+                "ticker": ticker,
+                "name": display_name(positions[ticker].get("name"), ticker),
+                "weight": float(positions[ticker]["weight"]),
+                "annual_vol": float(annual_vols[ticker]),
+                "risk_contribution_pct": float(risk_share[idx]),
+            }
+        )
+    top_entries.sort(key=lambda x: (-x["risk_contribution_pct"], x["ticker"]))
+
+    risk_hhi = float(np.square(risk_share).sum())
+    effective_risk_symbol_count = (1.0 / risk_hhi) if risk_hhi > 0 else ""
+    top1 = top_entries[0]
+    top3_risk_contribution = sum(x["risk_contribution_pct"] for x in top_entries[:3])
+
+    money_top_ticker = max(positions.values(), key=lambda x: (x["weight"], x["ticker"]))["ticker"]
+    money_top_difference = "一致" if money_top_ticker == top1["ticker"] else "不一致"
+
+    correlation = stock_returns.corr().to_numpy(dtype=float)
+    pair_weight_sum = 0.0
+    weighted_correlation_sum = 0.0
+    for i in range(len(eligible_tickers)):
+        for j in range(i + 1, len(eligible_tickers)):
+            pair_weight = float(weights[i] * weights[j])
+            corr_value = float(correlation[i, j])
+            if math.isfinite(corr_value):
+                pair_weight_sum += pair_weight
+                weighted_correlation_sum += pair_weight * corr_value
+    weighted_average_correlation = (
+        weighted_correlation_sum / pair_weight_sum if pair_weight_sum > 0 else 0.0
+    )
+    if weighted_average_correlation >= 0.60:
+        correlation_memo = "高"
+    elif weighted_average_correlation >= 0.30:
+        correlation_memo = "中"
+    else:
+        correlation_memo = "低"
+
+    portfolio_daily = stock_returns.to_numpy(dtype=float) @ weights
+    portfolio_daily = pd.Series(portfolio_daily, index=aligned.index, dtype=float)
+
+    benchmark_variance = float(benchmark_daily.var(ddof=1))
+    beta_to_topix = ""
+    if math.isfinite(benchmark_variance) and benchmark_variance > 0:
+        beta_to_topix = float(portfolio_daily.cov(benchmark_daily) / benchmark_variance)
+
+    active_daily = portfolio_daily - benchmark_daily
+    tracking_error_1y = float(active_daily.std(ddof=1) * math.sqrt(TRADING_DAYS_PER_YEAR))
+    information_ratio_1y = ""
+    if math.isfinite(tracking_error_1y) and tracking_error_1y > 0:
+        information_ratio_1y = float(
+            active_daily.mean() * TRADING_DAYS_PER_YEAR / tracking_error_1y
+        )
+
+    downside_capture_1y = ""
+    downside_mask = benchmark_daily < 0
+    if bool(downside_mask.any()):
+        portfolio_downside_return = float((1.0 + portfolio_daily[downside_mask]).prod() - 1.0)
+        benchmark_downside_return = float((1.0 + benchmark_daily[downside_mask]).prod() - 1.0)
+        if benchmark_downside_return < 0:
+            downside_capture_1y = float(portfolio_downside_return / benchmark_downside_return)
+
+    portfolio_index = (1.0 + portfolio_daily).cumprod()
+    running_max = portfolio_index.cummax()
+    drawdown = portfolio_index / running_max - 1.0
+    max_drawdown_1y = float(drawdown.min()) if not drawdown.empty else ""
+
+    top1_weight = float(top1["weight"])
+    top3_weight = sum(float(x["weight"]) for x in top_entries[:3])
+
+    stress_topix_minus10 = "" if beta_to_topix == "" else clip(float(beta_to_topix) * -0.10, -1.0, 1.0)
+    stress_topix_minus20 = "" if beta_to_topix == "" else clip(float(beta_to_topix) * -0.20, -1.0, 1.0)
+    stress_top1_minus20 = clip(top1_weight * -0.20, -1.0, 1.0)
+    stress_top3_minus20 = clip(top3_weight * -0.20, -1.0, 1.0)
+    stress_combined = ""
+    if beta_to_topix != "":
+        stress_combined = clip(float(beta_to_topix) * -0.10 + top3_weight * -0.15, -1.0, 1.0)
+
+    result.update(
+        {
+            "status": f"OK:{len(eligible_tickers)}銘柄/{coverage:.1%}",
+            "portfolio_vol_annual": float(portfolio_vol_annual),
+            "top1_risk_contributor_ticker": top1["ticker"],
+            "top1_risk_contributor_name": top1["name"],
+            "top1_risk_contribution_pct": float(top1["risk_contribution_pct"]),
+            "top3_risk_contribution_pct": float(top3_risk_contribution),
+            "risk_hhi": float(risk_hhi),
+            "effective_risk_symbol_count": float(effective_risk_symbol_count),
+            "money_top1_difference": money_top_difference,
+            "correlation_concentration_memo": correlation_memo,
+            "beta_to_topix": beta_to_topix,
+            "tracking_error_1y": tracking_error_1y,
+            "information_ratio_1y": information_ratio_1y,
+            "downside_capture_1y": downside_capture_1y,
+            "max_drawdown_1y": max_drawdown_1y,
+            "stress_topix_minus10_loss_pct": stress_topix_minus10,
+            "stress_topix_minus20_loss_pct": stress_topix_minus20,
+            "stress_top1_risk_minus20_loss_pct": stress_top1_minus20,
+            "stress_top3_risk_minus20_loss_pct": stress_top3_minus20,
+            "stress_topix_minus10_top3_minus15_loss_pct": stress_combined,
+            "top_entries": top_entries[:5],
+        }
+    )
+    return result
+
+
 def build_history_payload(ws, snapshot_date: str, history_row: list):
     """
-    履歴は AA:AW にだけ持つ。
-    - snapshot_date は latest_bar_date を使う
+    履歴は AU:CG にだけ持つ。
+    - snapshot_date は実行日を使う
     - 同じ日付があれば上書き
     - なければ追加
     - 最新日付を上、古い日付を下に並べる
@@ -522,7 +826,7 @@ def quote_sheet_name_for_a1(sheet_name: str):
 
 def read_observation_db(ws):
     """
-    AX:BK の観測DBを position_key をキーに読み込む。
+    CH:CU の観測DBを position_key をキーに読み込む。
     既存DBに重複キーがある場合は、上書き事故防止のため停止する。
     """
     values = ws.get(OBS_DB_DATA_RANGE)
@@ -586,7 +890,7 @@ def is_dividend_cache_fresh(cache_row, now_jst):
 
 def read_dividend_yield_cache(ws):
     """
-    BL:BO の配当利回りキャッシュを ticker キーで読み込む。
+    CV:CY の配当利回りキャッシュを ticker キーで読み込む。
     重複tickerは後勝ちにして、次回書き戻し時に正規化する。
     """
     values = ws.get(DIVIDEND_CACHE_DATA_RANGE)
@@ -734,7 +1038,7 @@ def build_position_key(ticker, custody_type):
 
 def build_observation_db_matrix(obs_db, rows, now_jst):
     """
-    既存DBと現在の有効保有行から、AX:BKへ書き戻すDB行を作る。
+    既存DBと現在の有効保有行から、CH:CUへ書き戻すDB行を作る。
     価格取得失敗は売却ではないため、holding_input_ok の行は active=True として扱う。
     """
     today = now_jst.strftime("%Y%m%d")
@@ -848,11 +1152,11 @@ def main():
         max_row=MAX_ROW,
     )
 
-    # 観測DB（AX:BK）を読み込む。空の場合だけ、初回移行としてQ:Rを参照する。
+    # 観測DB（CH:CU）を読み込む。空の場合だけ、初回移行としてQ:Rを参照する。
     obs_db = read_observation_db(ws)
     obs_db_is_empty = len(obs_db) == 0
 
-    # 配当利回りキャッシュ（BM:BP）を読み込む。
+    # 配当利回りキャッシュ（CV:CY）を読み込む。
     dividend_cache = read_dividend_yield_cache(ws)
 
     # rows: 14..2000 を全て保持（出力行数固定のため）
@@ -1356,9 +1660,7 @@ def main():
         )
     )
     def fmt_attention(rr):
-        tk = rr.get("ticker", "")
-        # 理由を削り、銘柄名のみを出力するように変更
-        return f"{tk}" if tk else ""
+        return display_name(rr.get("name", ""), rr.get("ticker", ""))
     c_top1 = fmt_attention(attention[0]) if len(attention) > 0 else ""
     c_top2 = fmt_attention(attention[1]) if len(attention) > 1 else ""
     c_top3 = fmt_attention(attention[2]) if len(attention) > 2 else ""
@@ -1470,6 +1772,16 @@ def main():
             pf_cum = topix_cum = alpha = ""
 
     # -------------------------
+    # 9.5) portfolio risk / benchmark analytics
+    # -------------------------
+    # 新規分析はauto_adjust=Trueの1年日足だけを使用し、失敗しても既存処理は継続する。
+    portfolio_analytics = calculate_portfolio_analytics(
+        valid_price_rows=valid_price_rows,
+        adjusted_close_df=close_1y_return,
+        selected_benchmark_ticker=selected_benchmark_ticker,
+    )
+
+    # -------------------------
     # 10) Build output matrices
     # -------------------------
     # E..T = 16 columns（E..P 既存出力 + Q..T 初回観測系4列）
@@ -1529,25 +1841,78 @@ def main():
             row.get("q3_judgement", ""),        # T: 3か月判定
         ])
 
-    # dashboard matrix（A1:M11）
+    # dashboard matrix（A1:X11）
     dash = build_dashboard_matrix()
 
-    # labels（固定）
-    benchmark_label_suffix = f"({selected_benchmark_ticker})" if selected_benchmark_ticker else ""
     labels = {
-        "A1": "更新日時(JST)", "A2": "総評価額(JPY)", "A3": "総取得額(JPY)", "A4": "総損益(JPY)", "A5": "総損益(%)", "A6": "銘柄数",
-        "D2": "上位1銘柄ウェイト(%)", "D3": "上位3銘柄ウェイト合計(%)", "D4": "HHI(銘柄集中度)", "D5": "EXIT銘柄数", "D6": "CAUTION銘柄数", "D7": "OK銘柄数",
-        "D8": "要注意Top1", "D9": "要注意Top2", "D10": "要注意Top3",
-        "H2": "期待年率(base)", "H3": "期待年率(opt)", "H4": "期待年率(pess)", "H5": "リバランス余剰現金(概算)",
-        "H6": "好調銘柄数", "H7": "不調銘柄数", "H8": "好調ウェイト合計",
-        "H9": "不調ウェイト合計", "H10": "24か月以上不調数", "H11": "株数増加銘柄数",
-        "L2": "過去1年PFリターン", "L3": f"過去1年TOPIX系{benchmark_label_suffix}", "L4": f"α(PF-TOPIX系{benchmark_label_suffix})",
-        "L5": "価格データ時刻", "L6": "実行ステータス", "L7": "エラー件数",
+        "A1": "更新日時(JST)",
+        "A2": "総評価額(JPY)",
+        "A3": "総取得額(JPY)",
+        "A4": "総損益(JPY)",
+        "A5": "総損益(%)",
+        "A6": "銘柄数",
+        "D2": "上位1銘柄ウェイト",
+        "D3": "上位3銘柄ウェイト合計",
+        "D4": "HHI(銘柄集中度)",
+        "D5": "EXIT銘柄数",
+        "D6": "CAUTION銘柄数",
+        "D7": "OK銘柄数",
+        "D8": "要注意Top1",
+        "D9": "要注意Top2",
+        "D10": "要注意Top3",
+        "G2": "期待年率(base)",
+        "G3": "期待年率(opt)",
+        "G4": "期待年率(pess)",
+        "G5": "リバランス余剰現金",
+        "G6": "好調銘柄数",
+        "G7": "不調銘柄数",
+        "G8": "好調ウェイト合計",
+        "G9": "不調ウェイト合計",
+        "G10": "24か月以上不調数",
+        "G11": "株数増加銘柄数",
+        "J1": "リスク寄与度",
+        "J2": "PF年率ボラ",
+        "J3": "最大リスク寄与",
+        "J4": "リスク寄与Top3合計",
+        "J5": "リスクHHI",
+        "J6": "実効リスク銘柄数",
+        "J7": "金額Top1との差",
+        "J8": "相関集中メモ",
+        "J9": "リスク寄与Top2",
+        "J10": "リスク寄与Top3",
+        "J11": "リスク計算状態",
+        "M1": "TOPIX比較・実行状態",
+        "M2": "過去1年PFリターン",
+        "M3": "過去1年TOPIX系",
+        "M4": "α(PF-TOPIX系)",
+        "M5": "価格データ時刻",
+        "M6": "実行ステータス",
+        "M7": "エラー件数",
+        "M8": "β(TOPIX)",
+        "M9": "トラッキングエラー",
+        "M10": "情報レシオ",
+        "M11": "下落捕捉率",
+        "P1": "ストレステスト",
+        "P2": "シナリオ",
+        "Q2": "損失率",
+        "R2": "概算損失",
+        "P3": "TOPIX -10%",
+        "P4": "TOPIX -20%",
+        "P5": "最大リスク銘柄 -20%",
+        "P6": "上位3リスク銘柄 -20%",
+        "P7": "TOPIX -10% + RiskTop3追加 -15%",
+        "P8": "想定最大DD",
+        "T1": "リスク寄与Top5",
+        "T2": "順位",
+        "U2": "企業名",
+        "V2": "W",
+        "W2": "年率ボラ",
+        "X2": "リスク寄与",
     }
-    for k, v in labels.items():
-        set_cell(dash, k, v)
+    for cell, label in labels.items():
+        set_cell(dash, cell, label)
 
-    # values（固定セル）
+    # values（既存 + 新規）
     total_cost = sum(int(r.get("cost_value", 0)) for r in valid_price_rows) if valid_price_rows else 0
     total_pnl = sum(int(r.get("pnl_jpy", 0)) for r in valid_price_rows) if valid_price_rows else 0
     total_pnl_pct = (total_market_value / total_cost - 1) if total_cost > 0 else 0
@@ -1580,7 +1945,6 @@ def main():
     set_cell(dash, "E2", float(top1))
     set_cell(dash, "E3", float(top3))
     set_cell(dash, "E4", float(hhi))
-
     set_cell(dash, "E5", int(cnt_exit))
     set_cell(dash, "E6", int(cnt_caution))
     set_cell(dash, "E7", int(cnt_ok))
@@ -1588,92 +1952,149 @@ def main():
     set_cell(dash, "E9", c_top2)
     set_cell(dash, "E10", c_top3)
 
-    set_cell(dash, "I2", float(pf_ret_base))
-    set_cell(dash, "I3", float(pf_ret_opt))
-    set_cell(dash, "I4", float(pf_ret_pess))
-    set_cell(dash, "I5", int(unallocated_cash))
-    set_cell(dash, "I6", int(good_count))
-    set_cell(dash, "I7", int(poor_count))
-    set_cell(dash, "I8", float(good_weight_sum))
-    set_cell(dash, "I9", float(poor_weight_sum))
-    set_cell(dash, "I10", int(poor_24m_count))
-    set_cell(dash, "I11", int(increased_qty_count))
+    set_cell(dash, "H2", float(pf_ret_base))
+    set_cell(dash, "H3", float(pf_ret_opt))
+    set_cell(dash, "H4", float(pf_ret_pess))
+    set_cell(dash, "H5", int(unallocated_cash))
+    set_cell(dash, "H6", int(good_count))
+    set_cell(dash, "H7", int(poor_count))
+    set_cell(dash, "H8", float(good_weight_sum))
+    set_cell(dash, "H9", float(poor_weight_sum))
+    set_cell(dash, "H10", int(poor_24m_count))
+    set_cell(dash, "H11", int(increased_qty_count))
 
-    set_cell(dash, "M2", pf_cum)
-    set_cell(dash, "M3", topix_cum)
-    set_cell(dash, "M4", alpha)
-    set_cell(dash, "M5", latest_bar)
-    set_cell(dash, "M6", exec_status)
-    set_cell(dash, "M7", int(error_count))
+    analytics_top_entries = portfolio_analytics.get("top_entries", [])
+    top1_risk_text = ""
+    top2_risk_text = ""
+    top3_risk_text = ""
+    if len(analytics_top_entries) >= 1:
+        top1_risk_text = f'{analytics_top_entries[0]["name"]} / {analytics_top_entries[0]["risk_contribution_pct"]:.1%}'
+    if len(analytics_top_entries) >= 2:
+        top2_risk_text = f'{analytics_top_entries[1]["name"]} / {analytics_top_entries[1]["risk_contribution_pct"]:.1%}'
+    if len(analytics_top_entries) >= 3:
+        top3_risk_text = f'{analytics_top_entries[2]["name"]} / {analytics_top_entries[2]["risk_contribution_pct"]:.1%}'
 
+    set_cell(dash, "K2", portfolio_analytics.get("portfolio_vol_annual", ""))
+    set_cell(dash, "K3", top1_risk_text)
+    set_cell(dash, "K4", portfolio_analytics.get("top3_risk_contribution_pct", ""))
+    set_cell(dash, "K5", portfolio_analytics.get("risk_hhi", ""))
+    set_cell(dash, "K6", portfolio_analytics.get("effective_risk_symbol_count", ""))
+    set_cell(dash, "K7", portfolio_analytics.get("money_top1_difference", ""))
+    set_cell(dash, "K8", portfolio_analytics.get("correlation_concentration_memo", ""))
+    set_cell(dash, "K9", top2_risk_text)
+    set_cell(dash, "K10", top3_risk_text)
+    set_cell(dash, "K11", portfolio_analytics.get("status", ""))
+
+    set_cell(dash, "N2", pf_cum)
+    set_cell(dash, "N3", topix_cum)
+    set_cell(dash, "N4", alpha)
+    set_cell(dash, "N5", latest_bar)
+    set_cell(dash, "N6", exec_status)
+    set_cell(dash, "N7", int(error_count))
+    set_cell(dash, "N8", portfolio_analytics.get("beta_to_topix", ""))
+    set_cell(dash, "N9", portfolio_analytics.get("tracking_error_1y", ""))
+    set_cell(dash, "N10", portfolio_analytics.get("information_ratio_1y", ""))
+    set_cell(dash, "N11", portfolio_analytics.get("downside_capture_1y", ""))
+
+    stress_keys = [
+        (3, "stress_topix_minus10_loss_pct"),
+        (4, "stress_topix_minus20_loss_pct"),
+        (5, "stress_top1_risk_minus20_loss_pct"),
+        (6, "stress_top3_risk_minus20_loss_pct"),
+        (7, "stress_topix_minus10_top3_minus15_loss_pct"),
+        (8, "max_drawdown_1y"),
+    ]
+    for row_num, key in stress_keys:
+        loss_pct = portfolio_analytics.get(key, "")
+        set_cell(dash, f"Q{row_num}", loss_pct)
+        loss_jpy = ""
+        if loss_pct != "" and loss_pct is not None:
+            loss_jpy = int(round(total_market_value * float(loss_pct)))
+        set_cell(dash, f"R{row_num}", loss_jpy)
+
+    for idx, entry in enumerate(analytics_top_entries[:5], start=1):
+        row_num = idx + 2
+        set_cell(dash, f"T{row_num}", idx)
+        set_cell(dash, f"U{row_num}", entry.get("name", ""))
+        set_cell(dash, f"V{row_num}", entry.get("weight", ""))
+        set_cell(dash, f"W{row_num}", entry.get("annual_vol", ""))
+        set_cell(dash, f"X{row_num}", entry.get("risk_contribution_pct", ""))
 
     # -------------------------
-    # 10.5) Build history row (AA:AW)
+    # 10.5) Build history row (AU:CG)
     # -------------------------
+    snapshot_date = now_jst.strftime("%Y-%m-%d")
     history_row = [
-        latest_bar,                              # AA snapshot_date (latest_bar_date)
-        now_jst.strftime("%Y-%m-%d %H:%M:%S"),   # AB updated_at_jst
-        int(total_market_value),                 # AC
-        int(total_cost),                         # AD
-        int(total_pnl),                          # AE
-        float(total_pnl_pct),                    # AF
-        int(symbol_count),                       # AG
-        float(top1),                             # AH
-        float(top3),                             # AI
-        float(hhi),                              # AJ
-        int(cnt_exit),                           # AK
-        int(cnt_caution),                        # AL
-        int(cnt_ok),                             # AM
-        float(pf_ret_base),                      # AN
-        float(pf_ret_opt),                       # AO
-        float(pf_ret_pess),                      # AP
-        int(value_10y_base),                     # AQ
-        int(value_10y_opt),                      # AR
-        int(value_10y_pess),                     # AS
-        int(unallocated_cash),                   # AT
-        pf_cum,                                  # AU
-        topix_cum,                               # AV
-        alpha,                                   # AW
+        snapshot_date,
+        now_jst.strftime("%Y-%m-%d %H:%M:%S"),
+        int(total_market_value),
+        int(total_cost),
+        int(total_pnl),
+        float(total_pnl_pct),
+        int(symbol_count),
+        float(top1),
+        float(top3),
+        float(hhi),
+        int(cnt_exit),
+        int(cnt_caution),
+        int(cnt_ok),
+        float(pf_ret_base),
+        float(pf_ret_opt),
+        float(pf_ret_pess),
+        int(value_10y_base),
+        int(value_10y_opt),
+        int(value_10y_pess),
+        int(unallocated_cash),
+        pf_cum,
+        topix_cum,
+        alpha,
+        portfolio_analytics.get("portfolio_vol_annual", ""),
+        portfolio_analytics.get("top1_risk_contributor_ticker", ""),
+        portfolio_analytics.get("top1_risk_contribution_pct", ""),
+        portfolio_analytics.get("top3_risk_contribution_pct", ""),
+        portfolio_analytics.get("risk_hhi", ""),
+        portfolio_analytics.get("effective_risk_symbol_count", ""),
+        portfolio_analytics.get("beta_to_topix", ""),
+        portfolio_analytics.get("tracking_error_1y", ""),
+        portfolio_analytics.get("information_ratio_1y", ""),
+        portfolio_analytics.get("downside_capture_1y", ""),
+        portfolio_analytics.get("max_drawdown_1y", ""),
+        portfolio_analytics.get("stress_topix_minus10_loss_pct", ""),
+        portfolio_analytics.get("stress_topix_minus20_loss_pct", ""),
+        portfolio_analytics.get("stress_top1_risk_minus20_loss_pct", ""),
+        portfolio_analytics.get("stress_top3_risk_minus20_loss_pct", ""),
+        portfolio_analytics.get("stress_topix_minus10_top3_minus15_loss_pct", ""),
     ]
 
-    history_payload = build_history_payload(ws, latest_bar, history_row)
+    history_payload = build_history_payload(ws, snapshot_date, history_row)
     obs_db_matrix = build_observation_db_matrix(obs_db, rows, now_jst)
     dividend_cache_matrix = build_dividend_cache_matrix(updated_dividend_cache, unique_tickers)
 
+    fixed_row_count = MAX_ROW - START_ROW + 1
+    obs_db_matrix_padded = pad_matrix_rows(obs_db_matrix, fixed_row_count, OBS_DB_COLS)
+    dividend_cache_matrix_padded = pad_matrix_rows(
+        dividend_cache_matrix,
+        fixed_row_count,
+        DIVIDEND_CACHE_COLS,
+    )
+
     # -------------------------
-    # 11) Write to sheet (clear -> write)
+    # 11) Write to sheet (single batch update / no clear)
     # -------------------------
-    clear_ranges = [DASH_RANGE, OUT_RANGE, OBS_DB_CLEAR_RANGE, DIVIDEND_CACHE_CLEAR_RANGE]
     update_payload = [
         {"range": DASH_RANGE, "values": dash},
         {"range": DIVIDEND_OUTPUT_HEADER_RANGE, "values": [["配当利回り"]]},
         {"range": OBS_HEADER_RANGE, "values": [OBS_HEADERS]},
         {"range": OUT_RANGE, "values": output_matrix},
+        {"range": HIST_HEADER_RANGE, "values": [HIST_HEADERS]},
         {"range": OBS_DB_HEADER_RANGE, "values": [OBS_DB_HEADERS]},
+        {"range": OBS_DB_DATA_RANGE, "values": obs_db_matrix_padded},
         {"range": DIVIDEND_CACHE_HEADER_RANGE, "values": [DIVIDEND_CACHE_HEADERS]},
+        {"range": DIVIDEND_CACHE_DATA_RANGE, "values": dividend_cache_matrix_padded},
     ]
 
-    if obs_db_matrix:
-        update_payload.append(
-            {
-                "range": f"{OBS_DB_START_COL}14:{OBS_DB_END_COL}{len(obs_db_matrix) + 13}",
-                "values": obs_db_matrix,
-            }
-        )
-
-    if dividend_cache_matrix:
-        update_payload.append(
-            {
-                "range": f"{DIVIDEND_CACHE_START_COL}14:{DIVIDEND_CACHE_END_COL}{len(dividend_cache_matrix) + 13}",
-                "values": dividend_cache_matrix,
-            }
-        )
-
     if history_payload is not None:
-        clear_ranges.append(HIST_CLEAR_RANGE)
         update_payload.extend(history_payload)
-
-    ws.batch_clear(clear_ranges)
 
     ws.batch_update(
         update_payload,
