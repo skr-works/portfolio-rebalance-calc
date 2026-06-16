@@ -33,9 +33,13 @@ DD_CAUTION = -0.20
 
 # risk analytics parameters
 TRADING_DAYS_PER_YEAR = 252
-RISK_MIN_OBSERVATIONS = 126
-RISK_MIN_COVERAGE = 0.80
-RISK_FFILL_LIMIT = 3
+RISK_MIN_RETURN_OBSERVATIONS = 200
+RISK_START_TOLERANCE_DAYS = 5
+RISK_END_TOLERANCE_DAYS = 3
+RISK_MIN_PRICE_COVERAGE = 0.95
+RISK_MIN_ANALYSIS_COVERAGE = 0.90
+RISK_MIN_STRESS_COVERAGE = 0.95
+RISK_MAX_DATA_QUALITY_WEIGHT = 0.05
 
 # output ranges
 DASH_RANGE = "A1:X11"
@@ -86,11 +90,11 @@ HIST_HEADERS = [
     "information_ratio_1y",                       # BZ
     "downside_capture_1y",                        # CA
     "max_drawdown_1y",                            # CB
-    "stress_topix_minus10_loss_pct",              # CC
-    "stress_topix_minus20_loss_pct",              # CD
-    "stress_top1_risk_minus20_loss_pct",          # CE
-    "stress_top3_risk_minus20_loss_pct",          # CF
-    "stress_topix_minus10_top3_minus15_loss_pct", # CG
+    "analysis_coverage",                          # CC
+    "short_history_excluded_weight",              # CD
+    "data_quality_excluded_weight",               # CE
+    "risk_calc_symbol_count",                     # CF
+    "risk_calc_status",                           # CG
 ]
 HIST_COLS = len(HIST_HEADERS)
 
@@ -497,8 +501,13 @@ def fetch_current_price_fast(ticker: str):
 def empty_portfolio_analytics(status="DATA_NG:NOT_CALCULATED"):
     return {
         "status": status,
-        "coverage": 0.0,
+        "analysis_coverage": 0.0,
+        "short_history_excluded_weight": 0.0,
+        "data_quality_excluded_weight": 0.0,
         "calc_symbol_count": 0,
+        "pf_cum_1y": "",
+        "topix_cum_1y": "",
+        "alpha_1y": "",
         "portfolio_vol_annual": "",
         "top1_risk_contributor_ticker": "",
         "top1_risk_contributor_name": "",
@@ -506,8 +515,6 @@ def empty_portfolio_analytics(status="DATA_NG:NOT_CALCULATED"):
         "top3_risk_contribution_pct": "",
         "risk_hhi": "",
         "effective_risk_symbol_count": "",
-        "money_top1_difference": "",
-        "correlation_concentration_memo": "",
         "beta_to_topix": "",
         "tracking_error_1y": "",
         "information_ratio_1y": "",
@@ -524,235 +531,344 @@ def empty_portfolio_analytics(status="DATA_NG:NOT_CALCULATED"):
 
 def calculate_portfolio_analytics(valid_price_rows, adjusted_close_df, selected_benchmark_ticker):
     """
-    既存のauto_adjust=True・1年日足だけを使い、追加APIなしで計算する。
+    auto_adjust=True の1年日足だけを使い、追加APIなしで計算する。
     特定/NISAの重複保有はticker単位で集約する。
+    固定1年期間に対して、分析対象・履歴不足・データ品質不足へ分類する。
     新規分析が失敗しても既存処理は止めず、空欄とstatusを返す。
     """
     result = empty_portfolio_analytics()
 
-    if adjusted_close_df is None or adjusted_close_df.empty:
-        result["status"] = "DATA_NG:NO_ADJUSTED_PRICE"
-        return result
-    if not selected_benchmark_ticker or selected_benchmark_ticker not in adjusted_close_df.columns:
-        result["status"] = "DATA_NG:BENCHMARK_MISSING"
-        return result
+    try:
+        if adjusted_close_df is None or adjusted_close_df.empty:
+            result["status"] = "DATA_NG:NO_ADJUSTED_PRICE"
+            return result
+        if not selected_benchmark_ticker or selected_benchmark_ticker not in adjusted_close_df.columns:
+            result["status"] = "DATA_NG:BENCHMARK_SERIES_MISSING"
+            return result
 
-    positions = {}
-    for row in valid_price_rows:
-        ticker = str(row.get("ticker", "")).strip()
-        if ticker == "":
-            continue
-        market_value = parse_float(row.get("market_value"))
-        if market_value is None or market_value <= 0:
-            continue
+        # 特定/NISAの同一tickerは、分析上だけ1銘柄へ集約する。
+        positions = {}
+        for row in valid_price_rows:
+            ticker = str(row.get("ticker", "")).strip()
+            if ticker == "":
+                continue
 
-        entry = positions.setdefault(
-            ticker,
-            {
-                "ticker": ticker,
-                "name": "",
-                "market_value": 0.0,
-            },
+            market_value = parse_float(row.get("market_value"))
+            if market_value is None or market_value <= 0:
+                continue
+
+            entry = positions.setdefault(
+                ticker,
+                {
+                    "ticker": ticker,
+                    "name": "",
+                    "market_value": 0.0,
+                },
+            )
+            entry["market_value"] += float(market_value)
+            if entry["name"] == "":
+                entry["name"] = str(row.get("name", "")).strip()
+
+        total_market_value = sum(x["market_value"] for x in positions.values())
+        if total_market_value <= 0:
+            result["status"] = "DATA_NG:NO_VALID_POSITION"
+            return result
+
+        for entry in positions.values():
+            entry["weight"] = entry["market_value"] / total_market_value
+
+        # ベンチマーク系列を正常な正数だけに正規化する。
+        benchmark_prices = pd.to_numeric(
+            adjusted_close_df[selected_benchmark_ticker],
+            errors="coerce",
         )
-        entry["market_value"] += float(market_value)
-        if entry["name"] == "":
-            entry["name"] = str(row.get("name", "")).strip()
+        benchmark_prices = benchmark_prices.replace([np.inf, -np.inf], np.nan)
+        benchmark_prices = benchmark_prices.where(benchmark_prices > 0)
+        benchmark_prices = benchmark_prices.groupby(level=0).last().sort_index().dropna()
 
-    total_market_value = sum(x["market_value"] for x in positions.values())
-    if total_market_value <= 0:
-        result["status"] = "DATA_NG:NO_VALID_POSITION"
-        return result
+        minimum_benchmark_prices = (
+            RISK_MIN_RETURN_OBSERVATIONS
+            + 1
+            + RISK_START_TOLERANCE_DAYS
+            + RISK_END_TOLERANCE_DAYS
+        )
+        if len(benchmark_prices) < minimum_benchmark_prices:
+            result["status"] = "DATA_NG:BENCHMARK_DATA_SHORT"
+            return result
 
-    for entry in positions.values():
-        entry["weight"] = entry["market_value"] / total_market_value
+        benchmark_index = benchmark_prices.index
+        fixed_price_index = benchmark_index[
+            RISK_START_TOLERANCE_DAYS:
+            len(benchmark_index) - RISK_END_TOLERANCE_DAYS
+        ]
+        fixed_benchmark_prices = benchmark_prices.reindex(fixed_price_index)
+        benchmark_daily = (
+            fixed_benchmark_prices
+            .pct_change(fill_method=None)
+            .replace([np.inf, -np.inf], np.nan)
+            .iloc[1:]
+        )
 
-    benchmark_prices = adjusted_close_df[selected_benchmark_ticker].dropna()
-    if len(benchmark_prices) < RISK_MIN_OBSERVATIONS + 1:
-        result["status"] = "DATA_NG:BENCHMARK_DATA_SHORT"
-        return result
+        if len(benchmark_daily) < RISK_MIN_RETURN_OBSERVATIONS or benchmark_daily.isna().any():
+            result["status"] = "DATA_NG:BENCHMARK_DATA_SHORT"
+            return result
 
-    benchmark_index = benchmark_prices.index
-    benchmark_returns = benchmark_prices.pct_change(fill_method=None).replace([np.inf, -np.inf], np.nan)
+        eligible_returns = {}
+        short_history_excluded_weight = 0.0
+        data_quality_excluded_weight = 0.0
 
-    ticker_returns = {}
-    for ticker, entry in positions.items():
-        if ticker not in adjusted_close_df.columns:
-            continue
+        for ticker, entry in positions.items():
+            full_weight = float(entry["weight"])
 
-        prices = adjusted_close_df[ticker].reindex(benchmark_index)
-        first_valid = prices.first_valid_index()
-        last_valid = prices.last_valid_index()
-        if first_valid is None or last_valid is None:
-            continue
+            if ticker not in adjusted_close_df.columns:
+                data_quality_excluded_weight += full_weight
+                continue
 
-        filled = prices.copy()
-        filled.loc[first_valid:last_valid] = filled.loc[first_valid:last_valid].ffill(limit=RISK_FFILL_LIMIT)
-        returns = filled.pct_change(fill_method=None).replace([np.inf, -np.inf], np.nan)
+            source_prices = pd.to_numeric(adjusted_close_df[ticker], errors="coerce")
+            source_prices = source_prices.replace([np.inf, -np.inf], np.nan)
+            source_prices = source_prices.where(source_prices > 0)
+            source_prices = source_prices.groupby(level=0).last().sort_index()
+            prices = source_prices.reindex(benchmark_index)
 
-        if int(returns.notna().sum()) >= RISK_MIN_OBSERVATIONS:
-            ticker_returns[ticker] = returns
+            valid_positions = np.flatnonzero(prices.notna().to_numpy())
+            if len(valid_positions) == 0:
+                data_quality_excluded_weight += full_weight
+                continue
 
-    eligible_tickers = sorted(ticker_returns.keys())
-    coverage = sum(positions[ticker]["weight"] for ticker in eligible_tickers)
-    result["coverage"] = float(coverage)
-    result["calc_symbol_count"] = len(eligible_tickers)
+            first_valid_position = int(valid_positions[0])
+            last_valid_position = int(valid_positions[-1])
 
-    if coverage < RISK_MIN_COVERAGE:
-        result["status"] = "DATA_NG:COVERAGE_LT_80"
-        return result
-    if len(eligible_tickers) < 2:
-        result["status"] = "DATA_NG:SYMBOL_LT_2"
-        return result
+            # 期間開始時に履歴がない銘柄はIPO等の履歴不足として扱う。
+            if first_valid_position > RISK_START_TOLERANCE_DAYS:
+                short_history_excluded_weight += full_weight
+                continue
 
-    aligned = pd.DataFrame({selected_benchmark_ticker: benchmark_returns})
-    for ticker in eligible_tickers:
-        aligned[ticker] = ticker_returns[ticker]
-    aligned = aligned.dropna(how="any")
+            valid_price_count = int(prices.notna().sum())
+            price_coverage = valid_price_count / len(benchmark_index)
+            latest_allowed_position = len(benchmark_index) - 1 - RISK_END_TOLERANCE_DAYS
 
-    if len(aligned) < RISK_MIN_OBSERVATIONS:
-        result["status"] = "DATA_NG:COMMON_DATA_SHORT"
-        return result
+            if last_valid_position < latest_allowed_position:
+                data_quality_excluded_weight += full_weight
+                continue
+            if price_coverage < RISK_MIN_PRICE_COVERAGE:
+                data_quality_excluded_weight += full_weight
+                continue
 
-    raw_weights = np.array([positions[ticker]["weight"] for ticker in eligible_tickers], dtype=float)
-    raw_weight_sum = float(raw_weights.sum())
-    if raw_weight_sum <= 0:
-        result["status"] = "DATA_NG:WEIGHT_ZERO"
-        return result
-    weights = raw_weights / raw_weight_sum
+            # 最初と最後の有効値の間だけ内部欠損を前方補完する。
+            filled = prices.copy()
+            first_label = benchmark_index[first_valid_position]
+            last_label = benchmark_index[last_valid_position]
+            filled.loc[first_label:last_label] = filled.loc[first_label:last_label].ffill()
 
-    stock_returns = aligned[eligible_tickers].astype(float)
-    benchmark_daily = aligned[selected_benchmark_ticker].astype(float)
-    covariance = stock_returns.cov().to_numpy(dtype=float)
+            fixed_prices = filled.reindex(fixed_price_index)
+            if fixed_prices.isna().any():
+                data_quality_excluded_weight += full_weight
+                continue
 
-    if covariance.shape != (len(eligible_tickers), len(eligible_tickers)) or not np.isfinite(covariance).all():
-        result["status"] = "DATA_NG:COVARIANCE_INVALID"
-        return result
+            returns = (
+                fixed_prices
+                .pct_change(fill_method=None)
+                .replace([np.inf, -np.inf], np.nan)
+                .iloc[1:]
+            )
+            if len(returns) < RISK_MIN_RETURN_OBSERVATIONS or returns.isna().any():
+                data_quality_excluded_weight += full_weight
+                continue
 
-    portfolio_variance_daily = float(weights.T @ covariance @ weights)
-    if not math.isfinite(portfolio_variance_daily) or portfolio_variance_daily <= 0:
-        result["status"] = "DATA_NG:PORTFOLIO_VARIANCE"
-        return result
+            eligible_returns[ticker] = returns.astype(float)
 
-    portfolio_vol_daily = math.sqrt(portfolio_variance_daily)
-    portfolio_vol_annual = portfolio_vol_daily * math.sqrt(TRADING_DAYS_PER_YEAR)
+        eligible_tickers = sorted(eligible_returns.keys())
+        analysis_coverage = sum(float(positions[ticker]["weight"]) for ticker in eligible_tickers)
 
-    covariance_weight = covariance @ weights
-    component_risk = weights * covariance_weight / portfolio_vol_daily
-    absolute_component = np.abs(component_risk)
-    absolute_component_sum = float(absolute_component.sum())
-    if absolute_component_sum <= 0 or not math.isfinite(absolute_component_sum):
-        result["status"] = "DATA_NG:RISK_CONTRIBUTION"
-        return result
-    risk_share = absolute_component / absolute_component_sum
+        result["analysis_coverage"] = float(analysis_coverage)
+        result["short_history_excluded_weight"] = float(short_history_excluded_weight)
+        result["data_quality_excluded_weight"] = float(data_quality_excluded_weight)
+        result["calc_symbol_count"] = len(eligible_tickers)
 
-    annual_vols = stock_returns.std(ddof=1) * math.sqrt(TRADING_DAYS_PER_YEAR)
-    top_entries = []
-    for idx, ticker in enumerate(eligible_tickers):
-        top_entries.append(
+        epsilon = 1e-12
+        if data_quality_excluded_weight > RISK_MAX_DATA_QUALITY_WEIGHT + epsilon:
+            result["status"] = "DATA_NG:QUALITY_WEIGHT_GT_5"
+            return result
+        if analysis_coverage + epsilon < RISK_MIN_ANALYSIS_COVERAGE:
+            result["status"] = "DATA_NG:COVERAGE_LT_90"
+            return result
+        if len(eligible_tickers) < 2:
+            result["status"] = "DATA_NG:SYMBOL_LT_2"
+            return result
+
+        raw_weights = np.array(
+            [positions[ticker]["weight"] for ticker in eligible_tickers],
+            dtype=float,
+        )
+        raw_weight_sum = float(raw_weights.sum())
+        if raw_weight_sum <= 0 or not math.isfinite(raw_weight_sum):
+            result["status"] = "DATA_NG:WEIGHT_ZERO"
+            return result
+        analysis_weights = raw_weights / raw_weight_sum
+
+        stock_returns = pd.DataFrame(
+            {ticker: eligible_returns[ticker] for ticker in eligible_tickers},
+            index=benchmark_daily.index,
+        ).astype(float)
+        if stock_returns.isna().any().any() or not np.isfinite(stock_returns.to_numpy()).all():
+            result["status"] = "DATA_NG:RETURN_MATRIX_INVALID"
+            return result
+
+        weight_series = pd.Series(analysis_weights, index=eligible_tickers, dtype=float)
+        portfolio_daily = stock_returns.mul(weight_series, axis=1).sum(axis=1)
+        if portfolio_daily.isna().any() or not np.isfinite(portfolio_daily.to_numpy()).all():
+            result["status"] = "DATA_NG:PORTFOLIO_RETURN_INVALID"
+            return result
+
+        portfolio_vol_daily = float(portfolio_daily.std(ddof=1))
+        if not math.isfinite(portfolio_vol_daily) or portfolio_vol_daily <= 0:
+            result["status"] = "DATA_NG:PORTFOLIO_VARIANCE"
+            return result
+        portfolio_vol_annual = portfolio_vol_daily * math.sqrt(TRADING_DAYS_PER_YEAR)
+
+        # PF/TOPIX比較は同一期間・同一分析対象・同一ウェイトで統一する。
+        pf_cum_1y = float((1.0 + portfolio_daily).prod() - 1.0)
+        topix_cum_1y = float((1.0 + benchmark_daily).prod() - 1.0)
+        alpha_1y = float(pf_cum_1y - topix_cum_1y)
+
+        benchmark_variance = float(benchmark_daily.var(ddof=1))
+        beta_to_topix = ""
+        if math.isfinite(benchmark_variance) and benchmark_variance > 0:
+            beta_to_topix = float(portfolio_daily.cov(benchmark_daily) / benchmark_variance)
+
+        active_daily = portfolio_daily - benchmark_daily
+        tracking_error_1y = float(
+            active_daily.std(ddof=1) * math.sqrt(TRADING_DAYS_PER_YEAR)
+        )
+        information_ratio_1y = ""
+        if math.isfinite(tracking_error_1y) and tracking_error_1y > 0:
+            information_ratio_1y = float(
+                active_daily.mean() * TRADING_DAYS_PER_YEAR / tracking_error_1y
+            )
+
+        downside_capture_1y = ""
+        downside_mask = benchmark_daily < 0
+        if bool(downside_mask.any()):
+            portfolio_downside_return = float(
+                (1.0 + portfolio_daily[downside_mask]).prod() - 1.0
+            )
+            benchmark_downside_return = float(
+                (1.0 + benchmark_daily[downside_mask]).prod() - 1.0
+            )
+            if benchmark_downside_return < 0:
+                downside_capture_1y = float(
+                    portfolio_downside_return / benchmark_downside_return
+                )
+
+        portfolio_index = (1.0 + portfolio_daily).cumprod()
+        running_max = portfolio_index.cummax()
+        drawdown = portfolio_index / running_max - 1.0
+        max_drawdown_1y = float(drawdown.min()) if not drawdown.empty else ""
+
+        # 全共分散行列は作らず、各銘柄とPFの共分散だけを使う。
+        asset_covariances = np.array(
+            [stock_returns[ticker].cov(portfolio_daily) for ticker in eligible_tickers],
+            dtype=float,
+        )
+        if not np.isfinite(asset_covariances).all():
+            result["status"] = "DATA_NG:RISK_CONTRIBUTION"
+            return result
+
+        component_risk = analysis_weights * asset_covariances / portfolio_vol_daily
+        absolute_component = np.abs(component_risk)
+        absolute_component_sum = float(absolute_component.sum())
+        if absolute_component_sum <= 0 or not math.isfinite(absolute_component_sum):
+            result["status"] = "DATA_NG:RISK_CONTRIBUTION"
+            return result
+        risk_share = absolute_component / absolute_component_sum
+
+        annual_vols = stock_returns.std(ddof=1) * math.sqrt(TRADING_DAYS_PER_YEAR)
+        top_entries = []
+        for idx, ticker in enumerate(eligible_tickers):
+            annual_vol = float(annual_vols[ticker])
+            if not math.isfinite(annual_vol):
+                result["status"] = "DATA_NG:RISK_CONTRIBUTION"
+                return result
+            top_entries.append(
+                {
+                    "ticker": ticker,
+                    "name": display_name(positions[ticker].get("name"), ticker),
+                    "weight": float(positions[ticker]["weight"]),
+                    "annual_vol": annual_vol,
+                    "risk_contribution_pct": float(risk_share[idx]),
+                }
+            )
+        top_entries.sort(key=lambda x: (-x["risk_contribution_pct"], x["ticker"]))
+
+        risk_hhi = float(np.square(risk_share).sum())
+        effective_risk_symbol_count = (1.0 / risk_hhi) if risk_hhi > 0 else ""
+        top1 = top_entries[0]
+        top3_entries = top_entries[:3]
+        top3_risk_contribution = sum(
+            float(x["risk_contribution_pct"]) for x in top3_entries
+        )
+
+        stress_topix_minus10 = ""
+        stress_topix_minus20 = ""
+        stress_top1_minus20 = ""
+        stress_top3_minus20 = ""
+        stress_combined = ""
+
+        full_stress_enabled = (
+            analysis_coverage + epsilon >= RISK_MIN_STRESS_COVERAGE
+            and data_quality_excluded_weight <= RISK_MAX_DATA_QUALITY_WEIGHT + epsilon
+            and beta_to_topix != ""
+        )
+        if full_stress_enabled:
+            top1_weight = float(top1["weight"])
+            top3_weight = sum(float(x["weight"]) for x in top3_entries)
+
+            stress_topix_minus10 = max(-1.0, float(beta_to_topix) * -0.10)
+            stress_topix_minus20 = max(-1.0, float(beta_to_topix) * -0.20)
+            stress_top1_minus20 = max(-1.0, top1_weight * -0.20)
+            stress_top3_minus20 = max(-1.0, top3_weight * -0.20)
+            stress_combined = max(
+                -1.0,
+                float(beta_to_topix) * -0.10 + top3_weight * -0.15,
+            )
+
+        if analysis_coverage + epsilon < RISK_MIN_STRESS_COVERAGE:
+            status = "OK:NO_STRESS:COVERAGE_90_95"
+        elif beta_to_topix == "":
+            status = "OK:NO_STRESS:BETA_UNAVAILABLE"
+        else:
+            status = "OK:FULL"
+
+        result.update(
             {
-                "ticker": ticker,
-                "name": display_name(positions[ticker].get("name"), ticker),
-                "weight": float(positions[ticker]["weight"]),
-                "annual_vol": float(annual_vols[ticker]),
-                "risk_contribution_pct": float(risk_share[idx]),
+                "status": status,
+                "pf_cum_1y": pf_cum_1y,
+                "topix_cum_1y": topix_cum_1y,
+                "alpha_1y": alpha_1y,
+                "portfolio_vol_annual": float(portfolio_vol_annual),
+                "top1_risk_contributor_ticker": top1["ticker"],
+                "top1_risk_contributor_name": top1["name"],
+                "top1_risk_contribution_pct": float(top1["risk_contribution_pct"]),
+                "top3_risk_contribution_pct": float(top3_risk_contribution),
+                "risk_hhi": float(risk_hhi),
+                "effective_risk_symbol_count": float(effective_risk_symbol_count),
+                "beta_to_topix": beta_to_topix,
+                "tracking_error_1y": tracking_error_1y,
+                "information_ratio_1y": information_ratio_1y,
+                "downside_capture_1y": downside_capture_1y,
+                "max_drawdown_1y": max_drawdown_1y,
+                "stress_topix_minus10_loss_pct": stress_topix_minus10,
+                "stress_topix_minus20_loss_pct": stress_topix_minus20,
+                "stress_top1_risk_minus20_loss_pct": stress_top1_minus20,
+                "stress_top3_risk_minus20_loss_pct": stress_top3_minus20,
+                "stress_topix_minus10_top3_minus15_loss_pct": stress_combined,
+                "top_entries": top_entries[:5],
             }
         )
-    top_entries.sort(key=lambda x: (-x["risk_contribution_pct"], x["ticker"]))
+        return result
 
-    risk_hhi = float(np.square(risk_share).sum())
-    effective_risk_symbol_count = (1.0 / risk_hhi) if risk_hhi > 0 else ""
-    top1 = top_entries[0]
-    top3_risk_contribution = sum(x["risk_contribution_pct"] for x in top_entries[:3])
-
-    money_top_ticker = max(positions.values(), key=lambda x: (x["weight"], x["ticker"]))["ticker"]
-    money_top_difference = "一致" if money_top_ticker == top1["ticker"] else "不一致"
-
-    correlation = stock_returns.corr().to_numpy(dtype=float)
-    pair_weight_sum = 0.0
-    weighted_correlation_sum = 0.0
-    for i in range(len(eligible_tickers)):
-        for j in range(i + 1, len(eligible_tickers)):
-            pair_weight = float(weights[i] * weights[j])
-            corr_value = float(correlation[i, j])
-            if math.isfinite(corr_value):
-                pair_weight_sum += pair_weight
-                weighted_correlation_sum += pair_weight * corr_value
-    weighted_average_correlation = (
-        weighted_correlation_sum / pair_weight_sum if pair_weight_sum > 0 else 0.0
-    )
-    if weighted_average_correlation >= 0.60:
-        correlation_memo = "高"
-    elif weighted_average_correlation >= 0.30:
-        correlation_memo = "中"
-    else:
-        correlation_memo = "低"
-
-    portfolio_daily = stock_returns.to_numpy(dtype=float) @ weights
-    portfolio_daily = pd.Series(portfolio_daily, index=aligned.index, dtype=float)
-
-    benchmark_variance = float(benchmark_daily.var(ddof=1))
-    beta_to_topix = ""
-    if math.isfinite(benchmark_variance) and benchmark_variance > 0:
-        beta_to_topix = float(portfolio_daily.cov(benchmark_daily) / benchmark_variance)
-
-    active_daily = portfolio_daily - benchmark_daily
-    tracking_error_1y = float(active_daily.std(ddof=1) * math.sqrt(TRADING_DAYS_PER_YEAR))
-    information_ratio_1y = ""
-    if math.isfinite(tracking_error_1y) and tracking_error_1y > 0:
-        information_ratio_1y = float(
-            active_daily.mean() * TRADING_DAYS_PER_YEAR / tracking_error_1y
-        )
-
-    downside_capture_1y = ""
-    downside_mask = benchmark_daily < 0
-    if bool(downside_mask.any()):
-        portfolio_downside_return = float((1.0 + portfolio_daily[downside_mask]).prod() - 1.0)
-        benchmark_downside_return = float((1.0 + benchmark_daily[downside_mask]).prod() - 1.0)
-        if benchmark_downside_return < 0:
-            downside_capture_1y = float(portfolio_downside_return / benchmark_downside_return)
-
-    portfolio_index = (1.0 + portfolio_daily).cumprod()
-    running_max = portfolio_index.cummax()
-    drawdown = portfolio_index / running_max - 1.0
-    max_drawdown_1y = float(drawdown.min()) if not drawdown.empty else ""
-
-    top1_weight = float(top1["weight"])
-    top3_weight = sum(float(x["weight"]) for x in top_entries[:3])
-
-    stress_topix_minus10 = "" if beta_to_topix == "" else clip(float(beta_to_topix) * -0.10, -1.0, 1.0)
-    stress_topix_minus20 = "" if beta_to_topix == "" else clip(float(beta_to_topix) * -0.20, -1.0, 1.0)
-    stress_top1_minus20 = clip(top1_weight * -0.20, -1.0, 1.0)
-    stress_top3_minus20 = clip(top3_weight * -0.20, -1.0, 1.0)
-    stress_combined = ""
-    if beta_to_topix != "":
-        stress_combined = clip(float(beta_to_topix) * -0.10 + top3_weight * -0.15, -1.0, 1.0)
-
-    result.update(
-        {
-            "status": f"OK:{len(eligible_tickers)}銘柄/{coverage:.1%}",
-            "portfolio_vol_annual": float(portfolio_vol_annual),
-            "top1_risk_contributor_ticker": top1["ticker"],
-            "top1_risk_contributor_name": top1["name"],
-            "top1_risk_contribution_pct": float(top1["risk_contribution_pct"]),
-            "top3_risk_contribution_pct": float(top3_risk_contribution),
-            "risk_hhi": float(risk_hhi),
-            "effective_risk_symbol_count": float(effective_risk_symbol_count),
-            "money_top1_difference": money_top_difference,
-            "correlation_concentration_memo": correlation_memo,
-            "beta_to_topix": beta_to_topix,
-            "tracking_error_1y": tracking_error_1y,
-            "information_ratio_1y": information_ratio_1y,
-            "downside_capture_1y": downside_capture_1y,
-            "max_drawdown_1y": max_drawdown_1y,
-            "stress_topix_minus10_loss_pct": stress_topix_minus10,
-            "stress_topix_minus20_loss_pct": stress_topix_minus20,
-            "stress_top1_risk_minus20_loss_pct": stress_top1_minus20,
-            "stress_top3_risk_minus20_loss_pct": stress_top3_minus20,
-            "stress_topix_minus10_top3_minus15_loss_pct": stress_combined,
-            "top_entries": top_entries[:5],
-        }
-    )
-    return result
+    except Exception:
+        return empty_portfolio_analytics("DATA_NG:ANALYTICS_EXCEPTION")
 
 
 def build_history_payload(ws, snapshot_date: str, history_row: list):
@@ -1734,45 +1850,7 @@ def main():
         value_10y_base = value_10y_opt = value_10y_pess = 0
 
     # -------------------------
-    # 9) backtest（仕様固定：1y、2点間リターンの加重平均）
-    # -------------------------
-    pf_cum = ""
-    topix_cum = ""
-    alpha = ""
-
-    if exec_status != "FAILED" and len(valid_price_rows) > 0:
-        try:
-            # TOPIX系ベンチマークの1年リターンは事前にフォールバック選定済み。
-
-            # PFリターンの計算（各銘柄の1年リターン × ウェイト）
-            pf_val = 0.0
-            valid_pf_weight = 0.0
-            
-            for r in valid_price_rows:
-                tk = r["ticker"]
-                w = float(r.get("weight", 0.0))
-                
-                if tk in return_1y_df.columns:
-                    s = return_1y_df[tk].dropna()
-                    if len(s) >= 2:
-                        ret_1y = (s.iloc[-1] / s.iloc[0]) - 1
-                        pf_val += ret_1y * w
-                        valid_pf_weight += w
-
-            # 全く計算できなかった場合を除外
-            if valid_pf_weight > 0:
-                pf_cum = float(pf_val)
-                
-                if topix_val is not None:
-                    topix_cum = float(topix_val)
-                    alpha = float(pf_val - topix_val)
-
-        except Exception:
-            # 例外時は空欄（実行ステータスには影響させない）
-            pf_cum = topix_cum = alpha = ""
-
-    # -------------------------
-    # 9.5) portfolio risk / benchmark analytics
+    # 9) portfolio risk / benchmark analytics
     # -------------------------
     # 新規分析はauto_adjust=Trueの1年日足だけを使用し、失敗しても既存処理は継続する。
     portfolio_analytics = calculate_portfolio_analytics(
@@ -1780,6 +1858,9 @@ def main():
         adjusted_close_df=close_1y_return,
         selected_benchmark_ticker=selected_benchmark_ticker,
     )
+    pf_cum = portfolio_analytics.get("pf_cum_1y", "")
+    topix_cum = portfolio_analytics.get("topix_cum_1y", "")
+    alpha = portfolio_analytics.get("alpha_1y", "")
 
     # -------------------------
     # 10) Build output matrices
@@ -1871,19 +1952,19 @@ def main():
         "G10": "24か月以上不調数",
         "G11": "株数増加銘柄数",
         "J1": "リスク寄与度",
-        "J2": "PF年率ボラ",
+        "J2": "分析対象PF年率ボラ",
         "J3": "最大リスク寄与",
         "J4": "リスク寄与Top3合計",
         "J5": "リスクHHI",
         "J6": "実効リスク銘柄数",
-        "J7": "金額Top1との差",
-        "J8": "相関集中メモ",
-        "J9": "リスク寄与Top2",
-        "J10": "リスク寄与Top3",
+        "J7": "分析対象ウェイト",
+        "J8": "履歴不足ウェイト",
+        "J9": "データ品質不足ウェイト",
+        "J10": "分析対象銘柄数",
         "J11": "リスク計算状態",
         "M1": "TOPIX比較・実行状態",
-        "M2": "過去1年PFリターン",
-        "M3": "過去1年TOPIX系",
+        "M2": "過去1年PFリターン（分析対象）",
+        "M3": "過去1年TOPIX系（同期間）",
         "M4": "α(PF-TOPIX系)",
         "M5": "価格データ時刻",
         "M6": "実行ステータス",
@@ -1965,24 +2046,21 @@ def main():
 
     analytics_top_entries = portfolio_analytics.get("top_entries", [])
     top1_risk_text = ""
-    top2_risk_text = ""
-    top3_risk_text = ""
     if len(analytics_top_entries) >= 1:
-        top1_risk_text = f'{analytics_top_entries[0]["name"]} / {analytics_top_entries[0]["risk_contribution_pct"]:.1%}'
-    if len(analytics_top_entries) >= 2:
-        top2_risk_text = f'{analytics_top_entries[1]["name"]} / {analytics_top_entries[1]["risk_contribution_pct"]:.1%}'
-    if len(analytics_top_entries) >= 3:
-        top3_risk_text = f'{analytics_top_entries[2]["name"]} / {analytics_top_entries[2]["risk_contribution_pct"]:.1%}'
+        top1_risk_text = (
+            f'{analytics_top_entries[0]["name"]} / '
+            f'{analytics_top_entries[0]["risk_contribution_pct"]:.1%}'
+        )
 
     set_cell(dash, "K2", portfolio_analytics.get("portfolio_vol_annual", ""))
     set_cell(dash, "K3", top1_risk_text)
     set_cell(dash, "K4", portfolio_analytics.get("top3_risk_contribution_pct", ""))
     set_cell(dash, "K5", portfolio_analytics.get("risk_hhi", ""))
     set_cell(dash, "K6", portfolio_analytics.get("effective_risk_symbol_count", ""))
-    set_cell(dash, "K7", portfolio_analytics.get("money_top1_difference", ""))
-    set_cell(dash, "K8", portfolio_analytics.get("correlation_concentration_memo", ""))
-    set_cell(dash, "K9", top2_risk_text)
-    set_cell(dash, "K10", top3_risk_text)
+    set_cell(dash, "K7", portfolio_analytics.get("analysis_coverage", 0.0))
+    set_cell(dash, "K8", portfolio_analytics.get("short_history_excluded_weight", 0.0))
+    set_cell(dash, "K9", portfolio_analytics.get("data_quality_excluded_weight", 0.0))
+    set_cell(dash, "K10", portfolio_analytics.get("calc_symbol_count", 0))
     set_cell(dash, "K11", portfolio_analytics.get("status", ""))
 
     set_cell(dash, "N2", pf_cum)
@@ -2059,11 +2137,11 @@ def main():
         portfolio_analytics.get("information_ratio_1y", ""),
         portfolio_analytics.get("downside_capture_1y", ""),
         portfolio_analytics.get("max_drawdown_1y", ""),
-        portfolio_analytics.get("stress_topix_minus10_loss_pct", ""),
-        portfolio_analytics.get("stress_topix_minus20_loss_pct", ""),
-        portfolio_analytics.get("stress_top1_risk_minus20_loss_pct", ""),
-        portfolio_analytics.get("stress_top3_risk_minus20_loss_pct", ""),
-        portfolio_analytics.get("stress_topix_minus10_top3_minus15_loss_pct", ""),
+        portfolio_analytics.get("analysis_coverage", 0.0),
+        portfolio_analytics.get("short_history_excluded_weight", 0.0),
+        portfolio_analytics.get("data_quality_excluded_weight", 0.0),
+        portfolio_analytics.get("calc_symbol_count", 0),
+        portfolio_analytics.get("status", ""),
     ]
 
     history_payload = build_history_payload(ws, snapshot_date, history_row)
