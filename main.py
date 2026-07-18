@@ -1703,7 +1703,7 @@ def main():
         cagr = cagr_3y if cagr_3y is not None else (cagr_1y if cagr_1y is not None else 0.0)
 
         dy = float(div_yield_map.get(tk, 0.0))
-        ret_base_raw = dy + float(cagr)
+        ret_base_raw = (dy / 100.0) + float(cagr)
         ret_base = clip(ret_base_raw, RET_CLIP_MIN, RET_CLIP_MAX)
         if ret_base is None:
             ret_base = 0.0
